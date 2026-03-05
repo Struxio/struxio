@@ -1,0 +1,24 @@
+[package]
+name = "struxio-worker"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "struxio-worker"
+path = "src/main.rs"
+
+[dependencies]
+struxio-common = { workspace = true }
+struxio-db = { workspace = true }
+struxio-core = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+redis = { workspace = true }
+dotenvy = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+anyhow = { workspace = true }
+sqlx = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+aws-credential-types = { workspace = true }
