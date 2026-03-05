@@ -19,7 +19,6 @@ Struxio is a self-hostable REST API that extracts structured data from documents
 - 📄 **Document extraction** — upload PDFs/images and extract structured data via JSON schema templates
 - 🔁 **Batch processing** — submit hundreds of documents as a single batch job
 - 🧩 **Custom templates** — define reusable extraction schemas with prompt templates
-- 📊 **Usage tracking** — per-org token and credit usage monitoring
 - 🔑 **API key auth** — static bearer token auth for self-hosted deployments
 - 🐳 **Docker-ready** — ships with a `docker-compose.yml` for local dev
 
@@ -118,8 +117,6 @@ curl -X POST http://localhost:8080/v1/templates \
 | GET | `/v1/extractions/{id}` | Poll extraction status |
 | POST | `/v1/batches` | Submit batch job |
 | GET | `/v1/batches/{id}` | Poll batch status |
-| GET | `/v1/usage/current` | Current token usage |
-| GET | `/v1/usage/credits` | Current credit usage |
 
 ### Document Uploading Pattern (Direct-to-S3)
 To ensure scalability and prevent our API servers from becoming bottlenecks with large files, Struxio uses a 3-step "Pre-signed URL" pattern for uploading documents:
@@ -147,16 +144,7 @@ All config is via environment variables. Copy `.env.example` to `.env`.
 | `S3_SECRET_ACCESS_KEY` | ✅ | S3 secret key |
 | `GEMINI_API_KEY` | ✅ | Google Gemini API key |
 | `STRUXIO_API_KEY` | ✅ | Bearer token for self-hosted auth |
-| `STRUXIO_ORG_ID` | ❌ | Organization ID (default: "default") |
 | `SERVER_PORT` | ❌ | Port (default: 8080) |
-
-## Self-Hosting vs Cloud
-
-Struxio is the open-source, self-hosted core. The managed cloud version (`struxio-cloud`) adds:
-
-- Clerk-based multi-user authentication
-- Stripe billing and plan management
-- Organization management and access control
 
 ## Contributing
 
@@ -164,4 +152,4 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
-[AGPL-3.0](./LICENSE) — free to use, modify, and self-host. Commercial cloud deployments require a separate license.
+[AGPL-3.0](./LICENSE) — free to use, modify, and self-host.
