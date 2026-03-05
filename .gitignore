@@ -1,0 +1,45 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock (keep for binaries, remove for libraries)
+# Cargo.lock  # leave this tracked for a binary project
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Keys & secrets
+*.pem
+*.key
+service-account*.json
+
+# SQLx offline query cache (optional: commit if you want offline builds)
+# .sqlx/
+
+# Coverage
+lcov.info
+tarpaulin-report.html
+coverage/
+
+# Profiling
+perf.data
+perf.data.old
+
+# Specs scratchpad
+.specs/scratchpad/
