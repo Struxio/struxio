@@ -189,6 +189,7 @@ async fn handle_job(
                 next_retry_at,
             )
             .await?;
+            refresh_batch_progress_if_needed(pool, job).await?;
         }
         Settlement::DeadLetter { .. } => {
             let failure = failure

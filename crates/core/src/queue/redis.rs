@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde::Serialize;
+use std::sync::Mutex;
 use std::time::Duration;
 use struxio_common::WorkspaceId;
 use uuid::Uuid;
@@ -107,6 +108,7 @@ pub struct RedisConsumer {
     group: String,
     consumer: String,
     config: RedisConsumerConfig,
+    reclaim_cursor: Mutex<String>,
 }
 
 impl RedisConsumer {
@@ -128,6 +130,7 @@ impl RedisConsumer {
                 max_attempts: config.max_attempts.max(1),
                 ..config
             },
+            reclaim_cursor: Mutex::new("0-0".to_string()),
         }
     }
 
@@ -248,16 +251,26 @@ impl QueueConsumer for RedisConsumer {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
         self.promote_due_retries(&mut conn).await?;
 
+        let reclaim_start = self
+            .reclaim_cursor
+            .lock()
+            .map_err(|_| QueueError::Other("reclaim cursor lock poisoned".to_string()))?
+            .clone();
         let reclaimed: ::redis::streams::StreamAutoClaimReply = ::redis::cmd("XAUTOCLAIM")
             .arg(EXTRACTION_STREAM)
             .arg(&self.group)
             .arg(&self.consumer)
             .arg(self.config.visibility_timeout.as_millis() as u64)
-            .arg("0-0")
+            .arg(reclaim_start)
             .arg("COUNT")
             .arg(1)
             .query_async(&mut conn)
             .await?;
+        *self
+            .reclaim_cursor
+            .lock()
+            .map_err(|_| QueueError::Other("reclaim cursor lock poisoned".to_string()))? =
+            reclaimed.next_stream_id.clone();
         if let Some(entry) = reclaimed.claimed.into_iter().next() {
             return self.read_entry(entry).await.map(Some);
         }
