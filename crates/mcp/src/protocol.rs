@@ -2,7 +2,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::error::{McpError, McpResult};
+use crate::error::McpError;
 
 /// Preferred MCP protocol revision advertised by this server.
 pub const PREFERRED_PROTOCOL_VERSION: &str = "2025-03-26";
@@ -144,10 +144,11 @@ impl JsonRpcResponse {
             payload: JsonRpcPayload::Error {
                 code: -32602,
                 message: "invalid params".to_string(),
-                data: Some(
-                    serde_json::to_value(error.clone().into_envelope())
-                        .unwrap_or_else(|_| json!({"error":{"code":"invalid_arguments","message":"invalid params"}})),
-                ),
+                data: Some(serde_json::to_value(error.clone().into_envelope()).unwrap_or_else(
+                    |_| {
+                        json!({"error":{"code":"invalid_arguments","message":"invalid params"}})
+                    },
+                )),
             },
         }
     }

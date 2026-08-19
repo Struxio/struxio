@@ -362,7 +362,8 @@ mod tests {
 
     #[test]
     fn catalog_exposes_the_compact_rfc_aligned_surface() {
-        let names: Vec<&str> = tool_definitions()
+        let definitions = tool_definitions();
+        let names: Vec<&str> = definitions
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();

@@ -6,8 +6,6 @@ use struxio_common::models::{
     BatchJob, CreateBatchRequest, CreateExtractionRequest, Extraction, ExtractionTemplate,
     InlineExtractionRequest,
 };
-#[cfg(test)]
-use struxio_common::AppError;
 use struxio_common::PrincipalContext;
 use struxio_core::queue::QueueProducer;
 use struxio_core::services::{
@@ -211,16 +209,10 @@ pub async fn extract_with<B: McpBackend>(
     }
 }
 
-/// Helper so `AppError` mapping stays covered next to the adapter.
-#[cfg(test)]
-pub fn map_app(error: AppError) -> McpError {
-    McpError::from_app(error)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use struxio_common::{PrincipalId, Scope, ScopeSet, WorkspaceId};
+    use struxio_common::{AppError, PrincipalId, Scope, ScopeSet, WorkspaceId};
 
     #[test]
     fn adapter_signature_requires_principal_context() {
@@ -236,7 +228,7 @@ mod tests {
 
     #[test]
     fn service_errors_are_stable() {
-        let err = map_app(AppError::NotFound("hidden-row".into()));
+        let err = McpError::from_app(AppError::NotFound("hidden-row".into()));
         assert_eq!(err.code(), "not_found");
         assert!(!err.message().contains("hidden-row"));
     }

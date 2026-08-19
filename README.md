@@ -20,6 +20,7 @@ Struxio is a self-hostable REST API that extracts structured data from documents
 - 🔁 **Batch processing** — submit hundreds of documents as a single batch job
 - 🧩 **Custom templates** — define reusable extraction schemas with prompt templates
 - 🔑 **API key auth** — static bearer token auth for self-hosted deployments
+- 🤖 **MCP stdio adapter** — named templates, inline/document extract, and batch status for agents ([docs/mcp.md](./docs/mcp.md))
 - 🐳 **Docker-ready** — ships with a Docker Compose file for local infrastructure
 
 ## Architecture
@@ -29,6 +30,7 @@ Struxio is a self-hostable REST API that extracts structured data from documents
 │                  struxio                    │
 │                                             │
 │  crates/api     — Axum HTTP server          │
+│  crates/mcp     — stdio MCP adapter         │
 │  crates/core    — business logic, services  │
 │  crates/db      — SQLx repositories         │
 │  crates/common  — shared models & config    │
@@ -77,7 +79,13 @@ docker compose up -d   # starts PostgreSQL, Redis, MinIO, and initializes the bu
 cargo run -p struxio-api
 ```
 
-The API is now running at `http://localhost:8080`.
+The API is now running at `http://localhost:8080`. Agents can use the same environment via the stdio MCP server:
+
+```bash
+cargo run -p struxio-mcp
+```
+
+See [docs/mcp.md](./docs/mcp.md) for the tool catalog, protocol decisions, and limits.
 
 ### 4. Make your first extraction
 

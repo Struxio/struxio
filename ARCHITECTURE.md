@@ -13,6 +13,7 @@ struxio/
 │   ├── db/         ← SQLx repository layer (raw DB queries)
 │   ├── core/       ← business logic, services, queue traits, storage, Gemini
 │   ├── api/        ← Axum HTTP server, routes, auth middleware
+│   ├── mcp/        ← stdio MCP adapter over the same services
 │   └── worker/     ← background job processor binary
 ├── migrations/     ← Postgres schema
 └── docker-compose.yml
@@ -22,10 +23,11 @@ struxio/
 
 ```
 common → db → core → api
+                   ↘ mcp
                    ↘ worker
 ```
 
-`api` and `worker` are the only binaries. Everything else is a library crate.
+`api`, `mcp`, and `worker` are the binaries. Everything else is a library crate. The MCP crate talks only to application services with a `PrincipalContext`; it does not call repositories. See [docs/mcp.md](./docs/mcp.md).
 
 ---
 
