@@ -116,6 +116,8 @@ CREATE TABLE evaluation_run_results (
         REFERENCES evaluation_fixtures (
             workspace_id, id, contract_id, contract_content_sha256
         ),
+    CONSTRAINT evaluation_run_results_workspace_id_id_contract_key
+        UNIQUE (workspace_id, id, contract_id, contract_content_sha256),
     CONSTRAINT evaluation_run_results_fixture_once_key
         UNIQUE (workspace_id, evaluation_run_id, fixture_id)
 );
