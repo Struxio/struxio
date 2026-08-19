@@ -460,6 +460,6 @@ mod tests {
 
     #[test]
     fn preferred_protocol_version_is_advertised_as_fallback() {
-        assert_eq!(PREFERRED_PROTOCOL_VERSION, "2025-03-26");
+        assert_eq!(crate::PREFERRED_PROTOCOL_VERSION, "2025-03-26");
     }
 }

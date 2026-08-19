@@ -51,13 +51,14 @@ cargo test       # run the test suite
 ```
 crates/
 ├── api/       — Axum HTTP server, routes, middleware
+├── mcp/       — stdio MCP adapter (JSON-RPC over services)
 ├── core/      — Business logic and service layer
 ├── db/        — SQLx repositories (no business logic)
 ├── common/    — Shared types (models, config, errors)
 └── worker/    — Background job processor
 ```
 
-**Key principle:** Business logic lives in `core/`, never in `api/` or `db/`. Routes call services. Services call repositories.
+**Key principle:** Business logic lives in `core/`, never in `api/`, `mcp/`, or `db/`. Routes and MCP tools call services. Services call repositories. The MCP crate must not perform unscoped repository access.
 
 ## Coding Standards
 
