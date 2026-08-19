@@ -1,11 +1,9 @@
 # Reducto as the product spec
 
 **Status:** proposed companion to [rebuild-rfc.md](./rebuild-rfc.md)  
-**Positioning:** Struxio is the open-source Reducto, the way Langfuse is the open-source LangSmith. Same platform shape, same agent/MCP surface, cheaper, self-hostable, no custom-VLM lab.
+**Positioning:** Reducto is the **platform shape** (parse IR, verbs, Studio, MCP), not the whole product. Struxio leads with **named JSON templates** (extract-first). See [rebuild-landscape.md](./rebuild-landscape.md) for other vendors and the performance doctrine. Cloud is the same software with GPUs, hosted keys, and a credit card.
 
-Reducto’s models are closed. Their **product** is not magic — it is a pipeline of layout, OCR, VLM review, a canonical parse tree, then extract/split/classify/edit on top, plus Studio and MCP. Most of those stages already exist as open-source libraries. We orchestrate them in Rust, own the IR and the APIs, and keep every capability in OSS. Cloud is the same software with GPUs, hosted keys, and a credit card.
-
-We do **not** clone their weights. We clone the **platform**.
+We do **not** clone their weights. We clone the **pipeline**, then add template-first UX they do not lead with.
 
 ---
 

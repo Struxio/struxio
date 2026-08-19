@@ -2,9 +2,9 @@
 
 **Status:** proposed  
 **Audience:** maintainers deciding how to turn this engine into a product people pay for  
-**Companion research:** four parallel reviews of the current code, MCP 2026, OSS+cloud comps, and the extract market; plus a feature/library map of Reducto in [rebuild-reducto-map.md](./rebuild-reducto-map.md).
+**Companion research:** codebase + MCP + OSS/cloud comps; Reducto as platform spec in [rebuild-reducto-map.md](./rebuild-reducto-map.md); other vendors, our template wedge, and the performance doctrine in [rebuild-landscape.md](./rebuild-landscape.md).
 
-This is the plan for the rebuild. Gemini-on-bytes already works as a shortcut. The product we are building is the **open-source Reducto**: parse → IR → extract/split/classify, with MCP and Studio, hosted or self-hosted.
+This is the plan for the rebuild. Gemini-on-bytes already works as a shortcut. The product is an **open-source document platform**: Reducto-shaped parse IR underneath, **Struxio templates on top** (you name the JSON), MCP + Studio, hosted or self-hosted, **fast by default**.
 
 ---
 
@@ -12,19 +12,17 @@ This is the plan for the rebuild. Gemini-on-bytes already works as a shortcut. T
 
 The thesis is right, and it is bigger than a hosted MCP wrapper.
 
-**Struxio is the open-source Reducto**, the way Langfuse is the open-source LangSmith. Same platform category (parse, extract, split, classify, citations, Studio, MCP). Full product in OSS. Cloud is the same software with zero ops and a credit card. Cheaper, because we orchestrate open-source layout/OCR/VLMs instead of amortizing a custom model lab.
+**Struxio is the open-source document platform** — Langfuse to LangSmith, Reducto for the parse/Studio/MCP *shape*, **our templates for the product**. Full platform in OSS. Cloud is the same software with zero ops and a credit card. Cheaper *and faster* by default: OSS layout/OCR, Flash-tier extract, agentic only when asked.
 
-The person who deploys this on a VM will not pay. That is fine — and now even more important: OSS must be a **complete document platform**, not a teaser. If parse and Studio are cloud-only, the Langfuse sentence is a lie. AGPL is the lawyer that stops someone else from hosting our engine as a competing cloud. It is not a conversion funnel.
+The nerd on a VM will not pay. OSS must still be complete (parse, extract, citations, Studio, MCP). AGPL fences resellers.
 
-The person who pays is the product builder sitting in Cursor, Claude Code, or Codex. He wants Reducto’s outcome (JSON, citations, folders of invoices) without Reducto’s price or a 12-model zoo on his laptop. He will pay extra to skip Docling + PaddleOCR + Redis + GPUs.
+The builder in Cursor pays to skip ops. He does not want to learn “parse then extract.” He wants **his JSON**: a named template, a folder of files, a result. That is already how this repo thinks (templates + batch). Keep it. Parse is how we make citations and scale honest; it is not the homepage.
 
-Enterprise (SSO, VPC, DPA, SLA) is a later check. Do not build it first. Do not paint the schema into a corner that makes it impossible.
+Do not *only* clone Reducto. Schema extract exists at Reducto, Extend, LlamaExtract, ADE, Chunkr. The wedge is **schema-first + named templates + batch + extract that parses for you + speed**. Steal LlamaExtract’s per-doc/page/entity targets, Extend’s schema inference, ADE’s parse-once/extract-many, Sensible’s validations. Details: [rebuild-landscape.md](./rebuild-landscape.md).
 
-**Interfaces:** MCP is how agents enter. REST is how pipelines and CI enter. Studio is how humans trust the output (bbox overlay). All three sit on one parse IR.
+**Performance is a product requirement, not a later polish.** Agentic incumbents publish 13–30 seconds per page. Our default path targets **p50 < 3s** on a 1–2 page digital invoice. Fast / accurate / agentic are explicit modes; **fast is default**.
 
-The website already markets a one-shot extract (`documentUrl` + schema → JSON). That stays as the happy path. Underneath, the rebuild adds parse-then-extract so citations are real and large files do not go to Gemini as base64.
-
-Feature and library map: [rebuild-reducto-map.md](./rebuild-reducto-map.md).
+**Interfaces:** MCP for agents, REST for pipelines, Studio for trust (bbox). All sit on one parse IR. Templates are what humans and agents talk about.
 
 ---
 
@@ -38,7 +36,7 @@ Feature and library map: [rebuild-reducto-map.md](./rebuild-reducto-map.md).
 
 Do not design pricing, UX, or the first roadmap around the nerd. Do not feature-gate parse or Studio to “upsell” him — that would not be Langfuse. GitLab-style open-core (paywall the graphs) is the wrong model.
 
-Closest analog: **Langfuse vs LangSmith** — same product, open and cheaper, self-host first-class, cloud for people who will not operate it. Plausible for the AGPL fence. Reducto for the feature list we implement with OSS libraries.
+Closest analog: **Langfuse vs LangSmith** for OSS+cloud. Reducto for parse IR / Studio / MCP. **Ourselves for templates** — schema-first is the homepage, not an afterthought. Landscape of everyone else: [rebuild-landscape.md](./rebuild-landscape.md).
 
 ---
 
@@ -81,22 +79,25 @@ Worker is serial (`COUNT 1`), ACKs failures with no retry, never marks a batch `
 
 ---
 
-## 4. Competitive position (be the open Reducto)
+## 4. Competitive position
 
-Reducto is the **reference platform**, not a rival we politely avoid. We implement their verbs and IR with open libraries; we do not train their 12-model zoo. Accuracy will lag on handwriting and nightmare tables until the review pass is good. That is the Langfuse bargain: same job, honest, cheaper, you can run it.
+Reducto is the **reference for the platform layer** (IR, verbs, Studio, MCP), not the ceiling and not a clone target. Schema extract is table stakes across the category. Our wedge is **templates + extract-first + speed**. Full vendor notes: [rebuild-landscape.md](./rebuild-landscape.md).
 
-| Player | What they are | Implication |
+| Player | Steal | Skip / beat |
 |---|---|---|
-| **Reducto** | Closed agentic document platform; parse/extract/split/classify/edit; Studio; MCP; ~$0.03/page extract | **Product spec.** Copy verbs, IR, citations, MCP, Studio. Beat them on price, openness, and friction. |
-| **Extend, LlamaExtract, Landing ADE** | Same closed category | Same story. We are the OSS alternative to the whole class. |
-| **Textract / Document AI / Azure DI** | Cloud-console IDP | Different buyer. Nested JSON Schema + agents. |
-| **Docling, MinerU, Marker/Surya, PaddleOCR** | OSS parse/OCR engines | **Backends we wrap**, not competitors. We own the IR, API, MCP, Studio, jobs. |
-| **Kreuzberg** | Apache Rust library + MCP | Library threat. We are the product (hosted, templates, pipelines, credits). Can also be a `ParseBackend`. |
+| **Reducto** | IR, citations, parse-once handles, MCP+CLI, Studio overlay | Price, closed, slow agentic default, upload hop, parse-first UX |
+| **Extend** | Schema inference, `money`/`date` types, template versioning, parse-vs-extract debug | 20s/page accurate mode as default; HITL year-one |
+| **LlamaExtract** | Named configs, `per_doc`/`per_page`/`per_entity`, Pydantic, OAuth MCP | 30s/page agentic parse; LlamaIndex lock-in |
+| **Landing ADE** | Parse once / extract many, alt field names, form block types, page-parallel parse | Forcing users to pass parse markdown into extract |
+| **Sensible** | Validations, OSS prebuilt configs, layout-fast path later | SenseML as v1 authoring language |
+| **Chunkr** | Citations that mirror schema field paths | Training our own parse VLM |
+| **Mistral OCR** | Optional fast `ParseBackend` (~$4/1k pages) | Single-vendor OCR |
+| **Textract / DI / Azure** | Fast structured path (~2–6s), IAM-grade ops later | Nested schema; agent UX |
+| **Nanonets / Rossum** | Great invoice/receipt system templates | ERP/HITL as the company |
+| **Docling / Marker / Kreuzberg** | **Backends** | They are not the product |
 
-Gemini Flash on a typical invoice is roughly **$0.001–0.01/page**. Reducto extract is ~$0.03/page plus parse. Parse-once + Flash-on-markdown + OCR only when needed is how we stay cheaper without lying about quality.
-
-**Promise:** the Reducto-shaped platform, open and cheaper.  
-**Anti-promise:** we will not claim SOTA vs Reducto until we publish a bake-off (RD-TableBench is public). We will not paywall parse or Studio.
+**Promise:** your JSON, named templates, open platform, **fast default**.  
+**Anti-promise:** we will not claim SOTA vs Reducto without a bake-off; we will not paywall parse/Studio; we will not ship 20s/page as the happy path.
 
 ---
 
@@ -127,7 +128,9 @@ Four planes. We sell hosted ops. The document platform itself is OSS (Langfuse r
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-Parse-then-extract is the spine. Current Gemini-on-bytes remains `parser = "vlm_direct"` for tiny files. Default path: Docling (or digital pdfium) → Struxio IR (chunks/blocks/bboxes) → schema extract with citations. Details and library map: [rebuild-reducto-map.md](./rebuild-reducto-map.md).
+Parse-then-extract is the spine. Current Gemini-on-bytes remains `parser = "vlm_direct"` for tiny files. Default path: Docling (or digital pdfium) → Struxio IR → **template/schema extract** with citations.
+
+**Templates are the product surface.** Named, slugged (`invoice`), versioned, system seeds already in the DB. `extract` and `extract_batch` take `template_id` **or** inline schema. Parse is how we get bboxes and stay cheap on the second schema; the user does not have to care. Beyond a Reducto clone: extraction target `document|page|entity`, schema inference, validations, parse-once / N templates — [rebuild-landscape.md](./rebuild-landscape.md).
 
 ### What “Struxio Web” is
 
@@ -138,7 +141,7 @@ Two layers, like Langfuse’s UI vs their cloud login:
 
 Week-1 cloud can ship the cash-register page first (remaining pages + Add to Cursor + one sample). Studio overlay is P2, but it is **in OSS**, not an EE teaser.
 
-Marketing site: sell “open-source Reducto” + Cursor path. Self-host is not a footer apology; it is the Langfuse half of the story.
+Marketing site: sell **“your JSON, from any document”** (templates + Add to Cursor), then “open-source, self-host the same engine.” Do not lead with parse chunks.
 
 ### What the OSS engine must stay
 
@@ -173,7 +176,7 @@ Match Reducto’s verbs. Keep upload implicit.
 | Tool | Job |
 |---|---|
 | `parse` | File → chunks/blocks/bboxes. Default for RAG / inspection |
-| `extract` | Schema or `template_id` → JSON (+ citations). Parses internally if no `job_id` |
+| `extract` | Schema or `template` slug → JSON (+ citations). Parses internally if needed. `mode=fast` default |
 | `extract_batch` | Glob / paths / urls. One call, not a loop |
 | `split` | NL sections → page ranges / subdocs |
 | `classify` | NL taxonomy → label |
@@ -188,7 +191,7 @@ v1 can ship `parse` + `extract` + `extract_batch` + templates + `get_job`. Split
 
 System instructions for the server should be short:
 
-> Struxio parses documents into a layout tree, then extracts JSON. For RAG or inspection call `parse`. For fields call `extract` (it will parse if needed). For a folder call `extract_batch` once. Prefer a saved template. Never ask the user for S3 URLs. If status is pending, call `get_job`.
+> Struxio fills a JSON Schema you define (prefer a saved template: `invoice`, `receipt`). Call `extract` for one file; it parses if needed. Call `extract_batch` once for a folder. Call `parse` only for RAG or to inspect layout. Default is fast mode. Never ask the user for S3 URLs. If status is pending, call `get_job`.
 
 ### File inputs (MCP has no binary file type)
 
@@ -260,7 +263,7 @@ MCP and cloud sit on top of a slightly different engine than we have now. This i
 4. **MIME normalization** — store real MIME; accept `pdf` and `application/pdf`.
 5. **Page count** — stop writing `page_count = 1`. Metering depends on it.
 6. **Gemini / LLM production path** — timeouts, retries, model allowlist; extract from IR rather than whole-file base64 when parse exists.
-7. **Worker** — concurrency limit, retries / DLQ, PEL reclaim, stream trim, honest batch terminal states, set `model_id`.
+7. **Worker** — **concurrent** consumers (not `COUNT 1`), retries / DLQ, PEL reclaim, stream trim, honest batch terminal states, set `model_id`. This is a feature *and* a performance fix.
 8. **Pagination** on every list. Failed sync extract must not look like HTTP success to naive clients (explicit envelope or non-200).
 9. **Confirm verifies the object.** Unique violations → 409. Transactional batch create.
 10. **Packaging** — Dockerfile (api / worker / mcp / parse sidecar), Compose profiles `core` + `parse`, working MinIO healthcheck.
@@ -284,6 +287,19 @@ crates/
 `core` needs two provider traits: **LLM** (Gemini today) and **ParseBackend** (digital pdfium → Docling → Marker). Quality improves by swapping backends, not by changing the API.
 
 OSS **lite**: in-process `vlm_direct` extract, no sidecar. OSS **full**: Compose `parse` profile. Cloud: always full.
+
+### Performance (hard constraint)
+
+Incumbent “accurate” modes publish **13–30s per page**. That is unacceptable as a default. Doctrine (full write-up in [rebuild-landscape.md](./rebuild-landscape.md) §4):
+
+- **Target:** p50 **< 3s** end-to-end extract on a 1–2 page digital invoice, template known.
+- **Modes:** `fast` (default) | `accurate` | `agentic` (opt-in, billed). MCP `next_steps` can suggest stepping up if confidence is low.
+- **Short-circuit:** text-layer PDF skips OCR/VLM parse. Parse once; more templates are cheap.
+- **Parallel pages + concurrent worker** — today’s `COUNT 1` loop is a P0 performance bug.
+- **Rust on the hot path**; sidecars only for model zoos. Timeouts, `max_pages`, advertised sync vs async.
+- **CI + dashboard latency** — no “it’s Rust” without numbers.
+
+Treat whole-file Gemini base64, serial workers, and double S3 download as performance bugs, same severity as missing parse.
 
 ---
 
@@ -400,13 +416,15 @@ Do not start Stripe before `workspace_id` exists.
 - [ ] Cursor deeplink + `SKILL.md` + invoice-folder demo
 - [ ] Flash as default hosted model
 - [ ] Dockerfile + Compose `core` and `parse`
-- [ ] Tests for IR fixtures + MCP transcripts
+- [ ] Template slugs (`invoice`) not only UUIDs; extraction `mode=fast|accurate`
+- [ ] Tests for IR fixtures + MCP transcripts + **latency fixture** (1-page digital PDF)
 
 ### P3 — Parity loop
 
 - [ ] OAuth for MCP; desktop bridge (`npx @struxio/mcp`)
 - [ ] Split + classify
-- [ ] Agentic review pass on low-confidence blocks (BYO VLM)
+- [ ] Extraction target `document|page|entity`; schema inference; result validations
+- [ ] Agentic review pass on low-confidence blocks (BYO VLM, **not default**)
 - [ ] OSS Studio bbox overlay
 - [ ] Template studio + webhooks
 - [ ] Worker reliability (retries, concurrency, honest batch status)
@@ -425,10 +443,11 @@ Edit / redact / generate / translate, SSO, audit export, VPC, DPA, SLA, commerci
 ## 12. What we will not do
 
 - Rewrite the **control plane** in Python. Rust orchestrates; Docling/PaddleOCR stay sidecars.
-- Feature-gate parse, extract, citations, or Studio in OSS. That would not be Langfuse; it would be a demo.
+- Feature-gate parse, extract, citations, or Studio in OSS.
 - Train a custom 12-model zoo before the IR and APIs exist.
-- Require agents to call check/confirm/upload before parse.
-- Optimize for enterprise procurement before a builder has paid $29.
+- **Default to agentic / 20s-per-page** to chase a bake-off screenshot.
+- Require agents to call check/confirm/upload, or to parse before extract.
+- Abandon named templates in favor of “just send a schema every time” like a parse-first clone.
 - Claim we out-parse Reducto until we publish numbers.
 
 ---
@@ -453,12 +472,13 @@ A polish would add docs and a Dockerfile and still be a wrapper. Reducto (and La
 
 A rebuild keeps the Rust engine and Gemini extract, and changes the center of gravity:
 
-- **Category:** open-source Reducto (Langfuse-style), not “thin extract API”
-- **Spine:** parse IR → extract/split/classify (Gemini-on-bytes is a backend, not the product)
+- **Category:** open document platform (Langfuse-style OSS+cloud)
+- **Wedge:** **your JSON** — named templates, batch, extract-first (not a parse-first Reducto clone)
+- **Spine:** parse IR underneath for citations, speed, and parse-once / extract-many
+- **Speed:** fast default; agentic is a flag; serial worker is a bug
+- **Steal:** LlamaExtract targets, Extend inference, ADE parse-once, Sensible validations, Mistral/Docling backends
 - **Interface:** MCP + REST + OSS Studio
-- **Buyer:** zero-ops builder; nerd gets the full platform for $0
 - **Packaging:** AGPL engine + OSS Studio + hosted GPUs/credits
 - **Schema:** workspace isolation before the second customer
-- **Cost:** parse once, OCR only when needed, Flash default
 
 Next implementation PR: P0 (`workspace_id` + `/v1/extract` + license honesty), then parse IR + `/v1/parse`, not a greenfield monorepo.
