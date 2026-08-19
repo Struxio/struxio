@@ -8,25 +8,25 @@ use struxio_db::repositories::{
 };
 use uuid::Uuid;
 
-use crate::gemini::GeminiClient;
+use crate::backend::{ExtractionBackend, ExtractionInput};
 use crate::queue::QueueProducer;
 use crate::storage::StorageClient;
 
 #[derive(Clone)]
-pub struct ExtractionService<Q: QueueProducer> {
+pub struct ExtractionService<Q: QueueProducer, B: ExtractionBackend + Clone> {
     db: PgPool,
     queue: Q,
     storage: StorageClient,
-    gemini: GeminiClient,
+    backend: B,
 }
 
-impl<Q: QueueProducer> ExtractionService<Q> {
-    pub fn new(db: PgPool, queue: Q, storage: StorageClient, gemini: GeminiClient) -> Self {
+impl<Q: QueueProducer, B: ExtractionBackend + Clone> ExtractionService<Q, B> {
+    pub fn new(db: PgPool, queue: Q, storage: StorageClient, backend: B) -> Self {
         Self {
             db,
             queue,
             storage,
-            gemini,
+            backend,
         }
     }
 
@@ -111,13 +111,13 @@ impl<Q: QueueProducer> ExtractionService<Q> {
 
         let start = std::time::Instant::now();
         match self
-            .gemini
-            .extract(
-                &file_bytes,
+            .backend
+            .extract(ExtractionInput::new(
+                file_bytes,
                 mime_type,
-                &template.prompt_template,
-                &template.json_schema,
-            )
+                template.prompt_template,
+                template.json_schema,
+            ))
             .await
         {
             Ok(response) => {
@@ -127,8 +127,8 @@ impl<Q: QueueProducer> ExtractionService<Q> {
                     ctx.workspace_id(),
                     extraction.id,
                     &response.result,
-                    response.input_tokens,
-                    response.output_tokens,
+                    response.usage.input_tokens,
+                    response.usage.output_tokens,
                     processing_time_ms,
                     model_id,
                     0,

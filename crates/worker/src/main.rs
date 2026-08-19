@@ -6,7 +6,8 @@ use std::time::Duration;
 use struxio_common::mime::normalize_mime_type;
 use struxio_common::JobExecutionContext;
 use struxio_core::{
-    gemini::GeminiClient,
+    backend::{ExtractionBackend, ExtractionInput},
+    gemini::GeminiBackend,
     queue::redis::RedisConsumer,
     queue::{ExtractionJob, QueueConsumer},
     storage::StorageClient,
@@ -46,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
     let s3 = S3Client::from_conf(s3_config);
     let storage = StorageClient::new(s3, config.s3_bucket.clone());
 
-    let gemini = GeminiClient::new(
+    let backend = GeminiBackend::new(
         config.gemini_api_key.clone(),
         config.gemini_model.clone(),
         Duration::from_secs(config.gemini_timeout_secs),
@@ -62,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
         match consumer.next_job().await {
             Ok(Some(job)) => {
                 tracing::info!(extraction_id = %job.extraction_id, workspace_id = %job.workspace_id, "Processing extraction");
-                match process_extraction(&job, &pool, &storage, &gemini).await {
+                match process_extraction(&job, &pool, &storage, &backend).await {
                     Ok(()) => {
                         consumer.ack(&job.stream_id).await?;
                         tracing::info!(extraction_id = %job.extraction_id, "Extraction completed");
@@ -91,11 +92,11 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn process_extraction(
+async fn process_extraction<B: ExtractionBackend>(
     job: &ExtractionJob,
     pool: &PgPool,
     storage: &StorageClient,
-    gemini: &GeminiClient,
+    backend: &B,
 ) -> anyhow::Result<()> {
     let ctx = JobExecutionContext::new(job.workspace_id);
     let workspace_id = ctx.workspace_id();
@@ -115,13 +116,13 @@ async fn process_extraction(
     let mime_type = normalize_mime_type(&doc.file_type)?;
 
     let start = std::time::Instant::now();
-    let response = gemini
-        .extract(
-            &file_bytes,
+    let response = backend
+        .extract(ExtractionInput::new(
+            file_bytes,
             mime_type,
-            &template.prompt_template,
-            &template.json_schema,
-        )
+            template.prompt_template,
+            template.json_schema,
+        ))
         .await?;
     let processing_time = start.elapsed().as_millis() as i32;
 
@@ -130,8 +131,8 @@ async fn process_extraction(
         workspace_id,
         job.extraction_id,
         &response.result,
-        response.input_tokens,
-        response.output_tokens,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
         Some(processing_time),
     )
     .await?;

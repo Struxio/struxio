@@ -2,6 +2,12 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use struxio_contracts::{BackendCapabilities, BackendCapability, BackendDescriptor};
+
+use crate::backend::{
+    ExtractionBackend, ExtractionBackendError, ExtractionInput, ExtractionOutput, TokenUsage,
+};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeminiResponse {
     pub result: serde_json::Value,
@@ -20,12 +26,16 @@ pub enum GeminiError {
 }
 
 #[derive(Clone)]
-pub struct GeminiClient {
+pub struct GeminiBackend {
     api_key: String,
     model: String,
     client: reqwest::Client,
     request_timeout: Duration,
+    descriptor: BackendDescriptor,
 }
+
+/// Compatibility name for callers that used the pre-provider-boundary API.
+pub type GeminiClient = GeminiBackend;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,7 +99,7 @@ struct UsageMetadata {
     candidates_token_count: Option<i32>,
 }
 
-impl GeminiClient {
+impl GeminiBackend {
     pub fn new(
         api_key: String,
         model: String,
@@ -104,6 +114,14 @@ impl GeminiClient {
             model,
             client,
             request_timeout,
+            descriptor: BackendDescriptor::new(
+                "gemini",
+                model.clone(),
+                BackendCapabilities::new()
+                    .with(BackendCapability::RawBytes)
+                    .with(BackendCapability::StructuredJson)
+                    .with(BackendCapability::Vision),
+            ),
         })
     }
 
@@ -189,6 +207,49 @@ impl GeminiClient {
             input_tokens,
             output_tokens,
         })
+    }
+}
+
+impl GeminiBackend {
+    pub fn descriptor(&self) -> &BackendDescriptor {
+        &self.descriptor
+    }
+}
+
+impl From<GeminiError> for ExtractionBackendError {
+    fn from(error: GeminiError) -> Self {
+        match error {
+            GeminiError::Http(error) => Self::Request(error.to_string()),
+            GeminiError::Api(error) => Self::Api(error),
+            GeminiError::Parse(error) => Self::Parse(error),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ExtractionBackend for GeminiBackend {
+    fn descriptor(&self) -> &BackendDescriptor {
+        self.descriptor()
+    }
+
+    async fn extract(
+        &self,
+        input: ExtractionInput,
+    ) -> Result<ExtractionOutput, ExtractionBackendError> {
+        let response = self
+            .extract(
+                &input.file_bytes,
+                &input.mime_type,
+                &input.prompt,
+                &input.json_schema,
+            )
+            .await
+            .map_err(ExtractionBackendError::from)?;
+
+        Ok(ExtractionOutput::new(
+            response.result,
+            TokenUsage::new(response.input_tokens, response.output_tokens),
+        ))
     }
 }
 
