@@ -4,10 +4,11 @@ Thank you for your interest in contributing! Struxio is an open-core project —
 
 ## What Belongs Here
 
-This repo (`struxio`) is the **OSS backend only**. Contributions here should focus on:
+This repo (`struxio`) is the **OSS engine**: REST API, worker, and MCP server. Contributions here should focus on:
 
 - Document extraction logic and AI prompt improvements
 - New API endpoints or expressive query parameters
+- MCP tools that call `core` (extract, extract_batch, templates) — not S3 check/confirm
 - Database schema improvements and migrations
 - Performance improvements (batching, async processing)
 - Developer experience (better error messages, docs, tests)
@@ -16,7 +17,10 @@ This repo (`struxio`) is the **OSS backend only**. Contributions here should foc
 **The following are out of scope for this repo:**
 - Authentication providers (Clerk, Auth0, etc.) → `struxio-cloud`
 - Payment/billing flows (Stripe, etc.) → `struxio-cloud`
+- Hosted MCP OAuth, multi-tenant metering, and the public MCP URL → `struxio-cloud`
 - Frontend/dashboard UI → `struxio-web`
+
+Product direction (MCP-first, hosted cloud for zero-ops buyers, OSS for self-hosters) is documented in [docs/rebuild-rfc.md](./docs/rebuild-rfc.md).
 
 ## Getting Started
 
@@ -48,10 +52,11 @@ cargo test       # run the test suite
 
 ```
 crates/
-├── api/       — Axum HTTP server, routes, middleware
+├── api/       — Axum HTTP server, routes, middleware (power-user REST)
 ├── core/      — Business logic and service layer
 ├── db/        — SQLx repositories (no business logic)
 ├── common/    — Shared types (models, config, errors)
+├── mcp/       — planned: MCP server (primary agent interface)
 └── worker/    — Background job processor
 ```
 
