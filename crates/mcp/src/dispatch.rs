@@ -261,6 +261,7 @@ mod tests {
             input_tokens: 1,
             output_tokens: 1,
             processing_time_ms: Some(5),
+            attempt: 0,
             created_at: Utc::now(),
             completed_at: Some(Utc::now()),
         }

@@ -298,6 +298,7 @@ mod tests {
                 input_tokens: 0,
                 output_tokens: 0,
                 processing_time_ms: None,
+                attempt: 0,
                 created_at: Utc::now(),
                 completed_at: None,
             })
