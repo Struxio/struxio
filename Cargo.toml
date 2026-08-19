@@ -40,6 +40,8 @@ aws-credential-types = { version = "1", features = ["hardcoded-credentials"] }
 md5 = "0.7"
 dotenvy = "0.15"
 sha2 = "0.10"
+jsonschema = { version = "0.46.10", default-features = false }
+regex = "1"
 rand = "0.8"
 base64 = "0.22"
 async-trait = "0.1"
