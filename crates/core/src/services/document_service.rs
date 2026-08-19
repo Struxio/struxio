@@ -2,7 +2,7 @@ use sqlx::PgPool;
 use struxio_common::models::{
     CheckDocumentRequest, CheckDocumentResponse, ConfirmUploadRequest, Document,
 };
-use struxio_common::{mime::normalize_mime_type, AppError, PrincipalContext};
+use struxio_common::{mime::normalize_mime_type, AppError, PrincipalContext, WorkspaceId};
 use struxio_db::repositories::documents::DocumentRepo;
 use uuid::Uuid;
 
@@ -67,6 +67,7 @@ impl DocumentService {
     ) -> Result<Document, AppError> {
         let mime_type = normalize_mime_type(&request.file_type)
             .map_err(|e| AppError::Validation(e.to_string()))?;
+        validate_workspace_s3_key(ctx.workspace_id(), &request.s3_key)?;
 
         DocumentRepo::create(
             &self.db,
@@ -110,5 +111,34 @@ impl DocumentService {
         }
 
         Ok(())
+    }
+}
+
+fn validate_workspace_s3_key(workspace_id: WorkspaceId, s3_key: &str) -> Result<(), AppError> {
+    let prefix = format!("{}/", workspace_id.as_uuid());
+    if s3_key.len() <= prefix.len() || !s3_key.starts_with(&prefix) {
+        return Err(AppError::Validation(
+            "s3_key does not belong to the authenticated workspace".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_workspace_s3_key;
+    use struxio_common::WorkspaceId;
+    use uuid::Uuid;
+
+    #[test]
+    fn upload_key_must_belong_to_workspace() {
+        let owner = WorkspaceId::new(Uuid::new_v4()).unwrap();
+        let other = WorkspaceId::new(Uuid::new_v4()).unwrap();
+        let owned_key = format!("{}/upload/invoice.pdf", owner.as_uuid());
+        let foreign_key = format!("{}/upload/invoice.pdf", other.as_uuid());
+
+        assert!(validate_workspace_s3_key(owner, &owned_key).is_ok());
+        assert!(validate_workspace_s3_key(owner, &foreign_key).is_err());
+        assert!(validate_workspace_s3_key(owner, &format!("{}/", owner.as_uuid())).is_err());
     }
 }

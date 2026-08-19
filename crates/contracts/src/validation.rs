@@ -43,7 +43,7 @@ pub enum Validator {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ValidatorRule {
     pointer: JsonPointer,
     validator: Validator,
@@ -63,6 +63,22 @@ impl ValidatorRule {
 
     pub fn validator(&self) -> &Validator {
         &self.validator
+    }
+}
+
+impl<'de> Deserialize<'de> for ValidatorRule {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireRule {
+            pointer: JsonPointer,
+            validator: Validator,
+        }
+
+        let wire = WireRule::deserialize(deserializer)?;
+        Self::new(wire.pointer, wire.validator).map_err(serde::de::Error::custom)
     }
 }
 
@@ -297,5 +313,17 @@ mod tests {
             },
         )
         .is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_regex_during_deserialization() {
+        let encoded = serde_json::json!({
+            "pointer": "/n",
+            "validator": {
+                "kind": "regex",
+                "value": {"pattern": "("}
+            }
+        });
+        assert!(serde_json::from_value::<ValidatorRule>(encoded).is_err());
     }
 }
