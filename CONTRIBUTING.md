@@ -21,7 +21,7 @@ This repo (`struxio`) is the **OSS document platform**: parse, extract, split/cl
 - Hosted MCP OAuth, multi-tenant metering, and the public MCP URL → `struxio-cloud`
 - Cloud login / Stripe chrome → `struxio-web` (OSS Studio bbox viewer can live with the engine or in `struxio-web` as a public app)
 
-Product direction: [docs/rebuild-rfc.md](./docs/rebuild-rfc.md), [docs/rebuild-reducto-map.md](./docs/rebuild-reducto-map.md), [docs/rebuild-landscape.md](./docs/rebuild-landscape.md).
+Product direction: [docs/rebuild-harness.md](./docs/rebuild-harness.md) (kernel vs harness), [docs/rebuild-rfc.md](./docs/rebuild-rfc.md).
 
 ## Getting Started
 

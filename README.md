@@ -148,7 +148,7 @@ All config is via environment variables. Copy `.env.example` to `.env`.
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md). Rebuild: [docs/rebuild-rfc.md](./docs/rebuild-rfc.md), Reducto map: [docs/rebuild-reducto-map.md](./docs/rebuild-reducto-map.md), landscape + performance: [docs/rebuild-landscape.md](./docs/rebuild-landscape.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md). Rebuild: [docs/rebuild-rfc.md](./docs/rebuild-rfc.md) · [harness](./docs/rebuild-harness.md) · [Reducto map](./docs/rebuild-reducto-map.md) · [landscape](./docs/rebuild-landscape.md).
 
 ## License
 

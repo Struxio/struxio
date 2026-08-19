@@ -186,8 +186,9 @@ MCP `extract` uses `fast` unless the user/agent says “be thorough” or confid
 
 ## 5. What this does to the rebuild
 
-- Keep Reducto as the **IR and verb set**.
-- Keep Langfuse as the **OSS+cloud motion**.
-- **Lead with templates** in README, MCP instructions, Studio, and homepage — that is the wedge vs parse-first SaaS.
-- Add LlamaExtract targets, Extend schema inference, Sensible validations, ADE parse-once, Mistral/Docling backends — without delaying P0 (`workspace_id` + one-shot extract).
-- Treat the serial worker, whole-file Gemini base64, and missing parse short-circuit as **performance bugs**, same severity as missing features.
+Build a **harness around extract**, not a parse company with extract bolted on. See [rebuild-harness.md](./rebuild-harness.md).
+
+- Lead with templates in README, MCP, Studio, homepage.
+- Put Reducto-shaped IR *under* extract (citations, parse-once, speed).
+- Add LlamaExtract targets, Extend inference, Sensible validations, ADE parse-once — as harness layers.
+- Treat the serial worker and whole-file Gemini base64 as harness bugs.

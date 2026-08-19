@@ -2,9 +2,9 @@
 
 **Status:** proposed  
 **Audience:** maintainers deciding how to turn this engine into a product people pay for  
-**Companion research:** codebase + MCP + OSS/cloud comps; Reducto as platform spec in [rebuild-reducto-map.md](./rebuild-reducto-map.md); other vendors, our template wedge, and the performance doctrine in [rebuild-landscape.md](./rebuild-landscape.md).
+**Companion research:** [rebuild-harness.md](./rebuild-harness.md) (kernel vs harness), [rebuild-reducto-map.md](./rebuild-reducto-map.md), [rebuild-landscape.md](./rebuild-landscape.md).
 
-This is the plan for the rebuild. Gemini-on-bytes already works as a shortcut. The product is an **open-source document platform**: Reducto-shaped parse IR underneath, **Struxio templates on top** (you name the JSON), MCP + Studio, hosted or self-hosted, **fast by default**.
+The rebuild in one sentence: **keep `extract(document, schema) → JSON` as a tiny kernel, and build a production harness around it** (ingest, parse IR, templates, cite, validate, batch, MCP, Studio). Fast by default. Hosted or self-hosted.
 
 ---
 
@@ -12,13 +12,11 @@ This is the plan for the rebuild. Gemini-on-bytes already works as a shortcut. T
 
 The thesis is right, and it is bigger than a hosted MCP wrapper.
 
-**Struxio is the open-source document platform** — Langfuse to LangSmith, Reducto for the parse/Studio/MCP *shape*, **our templates for the product**. Full platform in OSS. Cloud is the same software with zero ops and a credit card. Cheaper *and faster* by default: OSS layout/OCR, Flash-tier extract, agentic only when asked.
+**Struxio is a harness around structured extraction** — the way Langfuse is a harness around an LLM call. The kernel is already here: file + JSON Schema → JSON. The rebuild is everything that makes that kernel production-grade (parse-once IR, named templates, citations, validations, batch, MCP, Studio) without making parse the homepage.
 
-The nerd on a VM will not pay. OSS must still be complete (parse, extract, citations, Studio, MCP). AGPL fences resellers.
+OSS+cloud is still Langfuse-to-LangSmith. Reducto is still the reference for IR/Studio/MCP *pieces of the harness*. Our wedge is still **your JSON**, named templates, extract-first, **fast default**. Cloud sells the hosted harness so the builder never runs Docling.
 
-The builder in Cursor pays to skip ops. He does not want to learn “parse then extract.” He wants **his JSON**: a named template, a folder of files, a result. That is already how this repo thinks (templates + batch). Keep it. Parse is how we make citations and scale honest; it is not the homepage.
-
-Do not *only* clone Reducto. Schema extract exists at Reducto, Extend, LlamaExtract, ADE, Chunkr. The wedge is **schema-first + named templates + batch + extract that parses for you + speed**. Steal LlamaExtract’s per-doc/page/entity targets, Extend’s schema inference, ADE’s parse-once/extract-many, Sensible’s validations. Details: [rebuild-landscape.md](./rebuild-landscape.md).
+Do not *only* clone Reducto. Schema extract is table stakes. The harness is the product: templates, targets, infer, cite, validate, modes, jobs, evals. Details: [rebuild-harness.md](./rebuild-harness.md), [rebuild-landscape.md](./rebuild-landscape.md).
 
 **Performance is a product requirement, not a later polish.** Agentic incumbents publish 13–30 seconds per page. Our default path targets **p50 < 3s** on a 1–2 page digital invoice. Fast / accurate / agentic are explicit modes; **fast is default**.
 
@@ -128,9 +126,18 @@ Four planes. We sell hosted ops. The document platform itself is OSS (Langfuse r
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-Parse-then-extract is the spine. Current Gemini-on-bytes remains `parser = "vlm_direct"` for tiny files. Default path: Docling (or digital pdfium) → Struxio IR → **template/schema extract** with citations.
+```
+     MCP · REST · CLI · Studio · webhooks          adapters
+  ─────────────────────────────────────────────────────────
+     ingest  parse IR  templates  targets  validate
+     cite    modes     batch/jobs evals    metrics         harness
+  ─────────────────────────────────────────────────────────
+     extract(ir | bytes, schema) → JSON                    kernel
+```
 
-**Templates are the product surface.** Named, slugged (`invoice`), versioned, system seeds already in the DB. `extract` and `extract_batch` take `template_id` **or** inline schema. Parse is how we get bboxes and stay cheap on the second schema; the user does not have to care. Beyond a Reducto clone: extraction target `document|page|entity`, schema inference, validations, parse-once / N templates — [rebuild-landscape.md](./rebuild-landscape.md).
+Full split: [rebuild-harness.md](./rebuild-harness.md). Parse, split, and classify are harness (cache, routing, grounding) — not sibling products. `vlm_direct` Gemini-on-bytes is a kernel backend for tiny files. Default: harness parses (pdfium/Docling) → kernel fills the template.
+
+**Templates are the harness’s public object.** Named, slugged (`invoice`), versioned. `extract` / `extract_batch` take a template or inline schema. Users never have to care that parse ran.
 
 ### What “Struxio Web” is
 
@@ -145,7 +152,7 @@ Marketing site: sell **“your JSON, from any document”** (templates + Add to 
 
 ### What the OSS engine must stay
 
-A **complete document platform**: parse, extract with citations, split, classify, MCP, CLI. If self-host cannot parse an invoice to blocks and extract a schema, GitHub is a lie. OSS does not need Clerk or Stripe. It does need the parse sidecar (or `vlm_direct` fallback) and Studio.
+A **complete extract harness**: ingest, parse IR, templates, citations, batch, MCP, CLI. If self-host cannot fill the `invoice` template with citations, GitHub is a lie. Parse sidecar (or `vlm_direct` fallback) is part of the harness, not a paid add-on.
 
 Cloud talks to the engine as a **library** (`oss_router()` + `AppState` already exist), not as a rewrite, and not as “one shared database with a static key in front.”
 
@@ -275,13 +282,13 @@ MCP and cloud sit on top of a slightly different engine than we have now. This i
 
 ```
 crates/
-  common/     models, config, errors, parse IR (Chunk, Block, BBox)
+  common/     models, parse IR, template types
   db/         repositories
-  core/       ingest, parse (ParseBackend), review pass, extract, split, classify, jobs, storage
-  api/        REST: /v1/parse, /extract, /split, /classify, jobs
-  mcp/        MCP server; calls core
-  worker/     job runner
-  parse-sidecar (optional image)  Docling + PaddleOCR
+  core/       KERNEL extract/ + HARNESS ingest, parse, templates, validate, jobs
+  api/        adapter: REST
+  mcp/        adapter: MCP
+  worker/     harness: concurrent jobs
+  parse-sidecar           harness: Docling + OCR
 ```
 
 `core` needs two provider traits: **LLM** (Gemini today) and **ParseBackend** (digital pdfium → Docling → Marker). Quality improves by swapping backends, not by changing the API.
@@ -436,7 +443,7 @@ Edit / redact / generate / translate, SSO, audit export, VPC, DPA, SLA, commerci
 
 **One-sentence definition of done for “rebuild v1”:** GitHub login → Add to Cursor → agent parses/extracts a PDF against a schema → Stripe when free pages run out.
 
-**Definition of done for “open-source Reducto”:** self-host Compose `parse` profile can parse to bboxes, extract with citations, and inspect the result in OSS Studio — no Struxio account.
+**Definition of done for the open platform:** self-host Compose `parse` profile can fill the `invoice` template with citations, p50 extract on a digital invoice is in the fast-path budget, and Studio can overlay bboxes — no Struxio account.
 
 ---
 
@@ -470,15 +477,14 @@ The current app is “almost good” as a **Gemini extract skeleton**. It is not
 
 A polish would add docs and a Dockerfile and still be a wrapper. Reducto (and Langfuse, from the other side) show the bar: parse tree, citations, split/classify, Studio, MCP, self-host or cloud.
 
-A rebuild keeps the Rust engine and Gemini extract, and changes the center of gravity:
+A rebuild keeps the extract kernel and builds the harness:
 
-- **Category:** open document platform (Langfuse-style OSS+cloud)
-- **Wedge:** **your JSON** — named templates, batch, extract-first (not a parse-first Reducto clone)
-- **Spine:** parse IR underneath for citations, speed, and parse-once / extract-many
-- **Speed:** fast default; agentic is a flag; serial worker is a bug
-- **Steal:** LlamaExtract targets, Extend inference, ADE parse-once, Sensible validations, Mistral/Docling backends
-- **Interface:** MCP + REST + OSS Studio
-- **Packaging:** AGPL engine + OSS Studio + hosted GPUs/credits
-- **Schema:** workspace isolation before the second customer
+- **Kernel:** `extract(doc, schema) → JSON` (Gemini today; IR tomorrow)
+- **Harness:** ingest, parse, templates, cite, validate, modes, batch, evals, metrics
+- **Adapters:** MCP, REST, CLI, Studio
+- **Wedge:** named templates, extract-first, fast default
+- **Not:** a parse-first Reducto clone, or a 20s/page agentic default
+- **Steal:** LlamaExtract targets, Extend inference, ADE parse-once, Sensible validations
+- **Fence:** workspace_id before the second customer; AGPL for the harness
 
 Next implementation PR: P0 (`workspace_id` + `/v1/extract` + license honesty), then parse IR + `/v1/parse`, not a greenfield monorepo.
