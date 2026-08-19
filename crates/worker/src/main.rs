@@ -14,6 +14,8 @@ use struxio_db::repositories::{
     templates::TemplateRepo,
 };
 use sqlx::PgPool;
+use std::time::Duration;
+use struxio_common::mime::normalize_mime_type;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -48,7 +50,11 @@ async fn main() -> anyhow::Result<()> {
     let s3 = S3Client::from_conf(s3_config);
     let storage = StorageClient::new(s3, config.s3_bucket.clone());
 
-    let gemini = GeminiClient::new(config.gemini_api_key.clone(), config.gemini_model.clone());
+    let gemini = GeminiClient::new(
+        config.gemini_api_key.clone(),
+        config.gemini_model.clone(),
+        Duration::from_secs(config.gemini_timeout_secs),
+    )?;
 
     let consumer_name = format!("worker-{}", uuid::Uuid::new_v4());
     let consumer = RedisConsumer::new(redis, "workers".to_string(), consumer_name);
@@ -102,14 +108,7 @@ async fn process_extraction(
 
     let file_bytes = storage.download(&doc.s3_key).await?;
 
-    let mime_type = match doc.file_type.as_str() {
-        "pdf" => "application/pdf",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        _ => "application/octet-stream",
-    };
+    let mime_type = normalize_mime_type(&doc.file_type)?;
 
     let start = std::time::Instant::now();
     let response = gemini

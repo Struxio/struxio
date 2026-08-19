@@ -3,6 +3,7 @@ use aws_sdk_s3::config::Region;
 use aws_sdk_s3::Client as S3Client;
 use sqlx::PgPool;
 use struxio_common::config::Config;
+use std::time::Duration;
 use struxio_core::{
     gemini::GeminiClient,
     queue::redis::RedisProducer,
@@ -48,7 +49,11 @@ impl AppState {
         let s3 = S3Client::from_conf(s3_config);
         let storage = StorageClient::new(s3, config.s3_bucket.clone());
         let queue = RedisProducer::new(redis.clone());
-        let gemini = GeminiClient::new(config.gemini_api_key.clone(), config.gemini_model.clone());
+        let gemini = GeminiClient::new(
+            config.gemini_api_key.clone(),
+            config.gemini_model.clone(),
+            Duration::from_secs(config.gemini_timeout_secs),
+        )?;
 
         Ok(Self {
             config: config.clone(),

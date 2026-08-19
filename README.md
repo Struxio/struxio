@@ -20,7 +20,7 @@ Struxio is a self-hostable REST API that extracts structured data from documents
 - 🔁 **Batch processing** — submit hundreds of documents as a single batch job
 - 🧩 **Custom templates** — define reusable extraction schemas with prompt templates
 - 🔑 **API key auth** — static bearer token auth for self-hosted deployments
-- 🐳 **Docker-ready** — ships with a `docker-compose.yml` for local dev
+- 🐳 **Docker-ready** — ships with a Docker Compose file for local infrastructure
 
 ## Architecture
 
@@ -52,7 +52,7 @@ Struxio is a self-hostable REST API that extracts structured data from documents
 
 ### Prerequisites
 
-- [Rust](https://rustup.rs/) ≥ 1.75
+- [Rust](https://rustup.rs/) ≥ 1.85 (the repository pins Rust 1.85.0)
 - [Docker](https://docs.docker.com/get-docker/) & Docker Compose
 - A Gemini API key ([get one free](https://aistudio.google.com/))
 
@@ -68,7 +68,7 @@ cp .env.example .env
 ### 2. Start infrastructure
 
 ```bash
-docker compose up -d   # starts PostgreSQL, Redis, MinIO
+docker compose up -d   # starts PostgreSQL, Redis, MinIO, and initializes the bucket
 ```
 
 ### 3. Run the API server
@@ -85,7 +85,7 @@ The API is now running at `http://localhost:8080`.
 # Authenticate with your API key
 export API_KEY="your-key-from-.env"
 
-# Upload a document
+# Check a document and request a pre-signed upload URL
 curl -X POST http://localhost:8080/v1/documents/check \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
@@ -97,7 +97,14 @@ curl -X POST http://localhost:8080/v1/templates \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Invoice",
-    "json_schema": {"total": "number", "vendor": "string", "date": "string"},
+    "json_schema": {
+      "type": "object",
+      "properties": {
+        "total": {"type": "number"},
+        "vendor": {"type": "string"},
+        "date": {"type": "string"}
+      }
+    },
     "prompt_template": "Extract the invoice total, vendor name, and date."
   }'
 ```
@@ -122,6 +129,7 @@ curl -X POST http://localhost:8080/v1/templates \
 To ensure scalability and prevent our API servers from becoming bottlenecks with large files, Struxio uses a 3-step "Pre-signed URL" pattern for uploading documents:
 
 1. **Check & Request URL**: Send `POST /v1/documents/check` with the file metadata (`md5_hash`, `size_bytes`, `file_name`, `file_type`).
+    - `file_type` accepts a supported extension (`pdf`, `png`, `jpg`, `jpeg`, `gif`, `webp`) or its IANA MIME type. Unsupported types are rejected.
     - If the API returns `exists: true`, the document can be used immediately (saving bandwidth).
     - If it's new, the API returns an `upload_url` (a secure, temporary S3 pre-signed URL) and an `s3_key`.
 2. **Direct Upload**: Your client performs a standard HTTP `PUT` request with the raw file payload directly to the provided `upload_url`.
@@ -142,7 +150,10 @@ All config is via environment variables. Copy `.env.example` to `.env`.
 | `S3_BUCKET` | ✅ | S3 bucket name |
 | `S3_ACCESS_KEY_ID` | ✅ | S3 access key |
 | `S3_SECRET_ACCESS_KEY` | ✅ | S3 secret key |
+| `S3_REGION` | ❌ | S3 region (default: `us-east-1`) |
 | `GEMINI_API_KEY` | ✅ | Google Gemini API key |
+| `GEMINI_MODEL` | ❌ | Gemini model (default: `gemini-2.5-flash`) |
+| `GEMINI_TIMEOUT_SECS` | ❌ | Gemini request timeout in seconds (default: `120`) |
 | `STRUXIO_API_KEY` | ✅ | Bearer token for self-hosted auth |
 | `SERVER_PORT` | ❌ | Port (default: 8080) |
 

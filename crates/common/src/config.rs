@@ -1,5 +1,8 @@
 use std::env;
 
+pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
+pub const DEFAULT_GEMINI_TIMEOUT_SECS: u64 = 120;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
@@ -11,6 +14,7 @@ pub struct Config {
     pub s3_secret_access_key: String,
     pub gemini_api_key: String,
     pub gemini_model: String,
+    pub gemini_timeout_secs: u64,
     pub server_host: String,
     pub server_port: u16,
     pub log_level: String,
@@ -29,7 +33,9 @@ impl Config {
             s3_access_key_id: env::var("S3_ACCESS_KEY_ID")?,
             s3_secret_access_key: env::var("S3_SECRET_ACCESS_KEY")?,
             gemini_api_key: env::var("GEMINI_API_KEY")?,
-            gemini_model: env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.5-pro".to_string()),
+            gemini_model: env::var("GEMINI_MODEL")
+                .unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string()),
+            gemini_timeout_secs: parse_timeout_secs(env::var("GEMINI_TIMEOUT_SECS").ok()),
             server_host: env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             server_port: env::var("SERVER_PORT")
                 .ok()
@@ -45,5 +51,39 @@ impl Config {
                 })
                 .unwrap_or_default(),
         })
+    }
+}
+
+fn parse_timeout_secs(value: Option<String>) -> u64 {
+    value
+        .and_then(|value| value.parse().ok())
+        .filter(|seconds: &u64| *seconds > 0)
+        .unwrap_or(DEFAULT_GEMINI_TIMEOUT_SECS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_timeout_secs, DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_TIMEOUT_SECS};
+
+    #[test]
+    fn uses_flash_as_the_default_model() {
+        assert_eq!(DEFAULT_GEMINI_MODEL, "gemini-2.5-flash");
+    }
+
+    #[test]
+    fn uses_safe_timeout_for_missing_or_invalid_values() {
+        assert_eq!(
+            parse_timeout_secs(None),
+            DEFAULT_GEMINI_TIMEOUT_SECS
+        );
+        assert_eq!(
+            parse_timeout_secs(Some("0".to_string())),
+            DEFAULT_GEMINI_TIMEOUT_SECS
+        );
+        assert_eq!(
+            parse_timeout_secs(Some("not-a-duration".to_string())),
+            DEFAULT_GEMINI_TIMEOUT_SECS
+        );
+        assert_eq!(parse_timeout_secs(Some("45".to_string())), 45);
     }
 }

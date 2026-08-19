@@ -1,5 +1,7 @@
-use struxio_common::models::{CheckDocumentRequest, CheckDocumentResponse, ConfirmUploadRequest, Document};
-use struxio_common::AppError;
+use struxio_common::models::{
+    CheckDocumentRequest, CheckDocumentResponse, ConfirmUploadRequest, Document,
+};
+use struxio_common::{mime::normalize_mime_type, AppError};
 use struxio_db::repositories::documents::DocumentRepo;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -21,6 +23,9 @@ impl DocumentService {
         &self,
         request: &CheckDocumentRequest,
     ) -> Result<CheckDocumentResponse, AppError> {
+        let mime_type = normalize_mime_type(&request.file_type)
+            .map_err(|e| AppError::Validation(e.to_string()))?;
+
         if let Some(doc) = DocumentRepo::find_by_hash(&self.db, &request.md5_hash)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?
@@ -36,7 +41,7 @@ impl DocumentService {
         let s3_key = format!("{}/{}", Uuid::new_v4(), request.file_name);
         let upload_url = self
             .storage
-            .generate_presigned_upload_url(&s3_key, &request.file_type, 3600)
+            .generate_presigned_upload_url(&s3_key, mime_type, 3600)
             .await
             .map_err(|e| AppError::ExternalService(e.to_string()))?;
 
@@ -52,11 +57,14 @@ impl DocumentService {
         &self,
         request: &ConfirmUploadRequest,
     ) -> Result<Document, AppError> {
+        let mime_type = normalize_mime_type(&request.file_type)
+            .map_err(|e| AppError::Validation(e.to_string()))?;
+
         DocumentRepo::create(
             &self.db,
             &request.md5_hash,
             &request.file_name,
-            &request.file_type,
+            mime_type,
             &request.s3_key,
             request.size_bytes,
             1,

@@ -1,6 +1,7 @@
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeminiResponse {
     pub result: serde_json::Value,
@@ -23,6 +24,7 @@ pub struct GeminiClient {
     api_key: String,
     model: String,
     client: reqwest::Client,
+    request_timeout: Duration,
 }
 
 #[derive(Serialize)]
@@ -88,12 +90,25 @@ struct UsageMetadata {
 }
 
 impl GeminiClient {
-    pub fn new(api_key: String, model: String) -> Self {
-        Self {
+    pub fn new(
+        api_key: String,
+        model: String,
+        request_timeout: Duration,
+    ) -> Result<Self, reqwest::Error> {
+        let client = reqwest::Client::builder()
+            .timeout(request_timeout)
+            .build()?;
+
+        Ok(Self {
             api_key,
             model,
-            client: reqwest::Client::new(),
-        }
+            client,
+            request_timeout,
+        })
+    }
+
+    pub fn request_timeout(&self) -> Duration {
+        self.request_timeout
     }
 
     pub async fn extract(
@@ -179,5 +194,21 @@ impl GeminiClient {
             input_tokens,
             output_tokens,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GeminiClient;
+    use std::time::Duration;
+
+    #[test]
+    fn builds_client_with_configured_request_timeout() {
+        let timeout = Duration::from_secs(45);
+        let client =
+            GeminiClient::new("test-key".to_string(), "gemini-2.5-flash".to_string(), timeout)
+                .expect("test client should build");
+
+        assert_eq!(client.request_timeout(), timeout);
     }
 }

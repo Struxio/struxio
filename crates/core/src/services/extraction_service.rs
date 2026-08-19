@@ -1,7 +1,7 @@
 use struxio_common::models::{
     CreateExtractionRequest, Extraction, ExtractionTemplate, InlineExtractionRequest,
 };
-use struxio_common::AppError;
+use struxio_common::{mime::normalize_mime_type, AppError};
 use struxio_db::repositories::{
     documents::DocumentRepo,
     extractions::ExtractionRepo,
@@ -86,6 +86,9 @@ impl<Q: QueueProducer> ExtractionService<Q> {
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Template not found".to_string()))?;
 
+        let mime_type = normalize_mime_type(&doc.file_type)
+            .map_err(|e| AppError::Validation(e.to_string()))?;
+
         let extraction = ExtractionRepo::create_with_status(
             &self.db,
             request.document_id,
@@ -101,15 +104,6 @@ impl<Q: QueueProducer> ExtractionService<Q> {
             .download(&doc.s3_key)
             .await
             .map_err(|e| AppError::ExternalService(e.to_string()))?;
-
-        let mime_type = match doc.file_type.as_str() {
-            "pdf" => "application/pdf",
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "gif" => "image/gif",
-            "webp" => "image/webp",
-            _ => "application/octet-stream",
-        };
 
         let start = std::time::Instant::now();
         match self
@@ -148,6 +142,9 @@ impl<Q: QueueProducer> ExtractionService<Q> {
     ) -> Result<Extraction, AppError> {
         use base64::{engine::general_purpose::STANDARD, Engine};
 
+        let mime_type = normalize_mime_type(&request.file_type)
+            .map_err(|e| AppError::Validation(e.to_string()))?;
+
         // 1. Decode base64
         let file_bytes = STANDARD
             .decode(&request.file_base64)
@@ -165,7 +162,7 @@ impl<Q: QueueProducer> ExtractionService<Q> {
             None => {
                 let s3_key = format!("{}/{}", uuid::Uuid::new_v4(), request.file_name);
                 self.storage
-                    .upload(&s3_key, &file_bytes, &request.file_type)
+                    .upload(&s3_key, &file_bytes, mime_type)
                     .await
                     .map_err(|e| AppError::ExternalService(e.to_string()))?;
 
@@ -173,7 +170,7 @@ impl<Q: QueueProducer> ExtractionService<Q> {
                     &self.db,
                     &md5_hash,
                     &request.file_name,
-                    &request.file_type,
+                    mime_type,
                     &s3_key,
                     file_bytes.len() as i64,
                     1,
