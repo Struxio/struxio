@@ -211,6 +211,7 @@ impl EvaluationRunRepo {
         row.map(row_to_run).transpose()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn append_result(
         pool: &PgPool,
         workspace_id: WorkspaceId,
@@ -248,6 +249,7 @@ impl EvaluationRunRepo {
     /// remains the schema-pure result; the candidate's evidence report is
     /// persisted later through ValidationReportRepo without wrapping either
     /// into the result JSON.
+    #[allow(clippy::too_many_arguments)]
     pub async fn append_candidate_result(
         pool: &PgPool,
         workspace_id: WorkspaceId,
