@@ -120,9 +120,10 @@ Four planes. We sell hosted ops. The document platform itself is OSS (Langfuse r
 └────────────────────────────┬────────────────────────────────────┘
                              │ workspace_id
 ┌────────────────────────────▼────────────────────────────────────┐
-│  ENGINE  — AGPL (this repo)                                     │
-│  ingest → parse (IR) → review → extract / split / classify      │
-│  REST /v1  ·  MCP  ·  CLI  ·  worker  ·  parse sidecar          │
+│  ENGINE  — AGPL                                               │
+│  KERNEL  extract(ir, schema) → JSON                           │
+│  HARNESS ingest · parse · templates · cite · validate · jobs  │
+│  ADAPTERS REST · MCP · CLI                                    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
