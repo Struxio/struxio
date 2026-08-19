@@ -113,3 +113,30 @@ pub trait QueueConsumer: Send + Sync + 'static {
     /// Persist a DLQ entry and acknowledge the current entry atomically.
     async fn dead_letter(&self, job: &ExtractionJob, reason: &str) -> Result<(), QueueError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ExtractionJob;
+    use struxio_common::WorkspaceId;
+    use uuid::Uuid;
+
+    #[test]
+    fn retries_keep_stable_identity_and_tenant_context() {
+        let extraction_id = Uuid::new_v4();
+        let workspace_id = WorkspaceId::local();
+        let job = ExtractionJob::new(
+            extraction_id,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            workspace_id,
+            Some(Uuid::new_v4()),
+            7,
+        );
+
+        assert_eq!(job.job_id, extraction_id);
+        assert_eq!(job.extraction_id, extraction_id);
+        assert_eq!(job.workspace_id, workspace_id);
+        assert_eq!(job.attempt, 1);
+        assert_eq!(job.max_attempts, 7);
+    }
+}

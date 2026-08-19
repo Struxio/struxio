@@ -87,9 +87,9 @@ async fn main() -> anyhow::Result<()> {
     );
 
     loop {
+        let permit = semaphore.clone().acquire_owned().await?;
         match consumer.next_job().await {
             Ok(Some(job)) => {
-                let permit = semaphore.clone().acquire_owned().await?;
                 let consumer = consumer.clone();
                 let pool = pool.clone();
                 let storage = storage.clone();
@@ -116,8 +116,9 @@ async fn main() -> anyhow::Result<()> {
                     }
                 });
             }
-            Ok(None) => continue,
+            Ok(None) => drop(permit),
             Err(e) => {
+                drop(permit);
                 tracing::error!(error = %e, "Error reading from queue");
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
