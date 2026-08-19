@@ -5,20 +5,17 @@ use sqlx::PgPool;
 use std::time::Duration;
 use struxio_common::config::Config;
 use struxio_common::PrincipalContext;
-use struxio_db::repositories::workspaces::WorkspaceRepo;
 use struxio_core::{
     gemini::GeminiClient,
     queue::redis::RedisProducer,
     services::{
-        batch_service::BatchService,
-        document_service::DocumentService,
-        extraction_service::ExtractionService,
-        model_service::ModelService,
+        batch_service::BatchService, document_service::DocumentService,
+        extraction_service::ExtractionService, model_service::ModelService,
         template_service::TemplateService,
     },
     storage::StorageClient,
 };
-
+use struxio_db::repositories::workspaces::WorkspaceRepo;
 
 #[derive(Clone)]
 pub struct AppState {

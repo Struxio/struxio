@@ -19,9 +19,11 @@ impl FromRequestParts<AppState> for PrincipalContext {
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| ApiError(AppError::Auth("Missing Authorization header".to_string())))?;
 
-        let token = auth_header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| ApiError(AppError::Auth("Invalid Authorization header format".to_string())))?;
+        let token = auth_header.strip_prefix("Bearer ").ok_or_else(|| {
+            ApiError(AppError::Auth(
+                "Invalid Authorization header format".to_string(),
+            ))
+        })?;
 
         let expected_key = std::env::var("STRUXIO_API_KEY").unwrap_or_default();
         if expected_key.is_empty() || token != expected_key {

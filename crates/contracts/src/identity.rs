@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{fmt, str::FromStr};
+use std::{
+    fmt::{self, Write as _},
+    str::FromStr,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityError {
@@ -121,7 +124,11 @@ impl Sha256ContentHash {
     }
 
     pub fn as_hex(&self) -> String {
-        self.0.iter().map(|byte| format!("{byte:02x}")).collect()
+        let mut output = String::with_capacity(64);
+        for byte in self.0 {
+            write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");
+        }
+        output
     }
 }
 

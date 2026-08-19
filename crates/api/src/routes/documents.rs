@@ -45,11 +45,7 @@ pub async fn list_documents(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Document>>, ApiError> {
     require_scope(&ctx, Scope::DocumentsRead).map_err(ApiError)?;
-    let docs = state
-        .document_service
-        .list(&ctx)
-        .await
-        .map_err(ApiError)?;
+    let docs = state.document_service.list(&ctx).await.map_err(ApiError)?;
     Ok(Json(docs))
 }
 

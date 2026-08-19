@@ -46,7 +46,11 @@ pub async fn get_batch(
     Path(path): Path<super::IdPath>,
 ) -> Result<Json<BatchJob>, ApiError> {
     require_scope(&ctx, Scope::BatchesRead).map_err(ApiError)?;
-    let batch = state.batch_service.get(&ctx, path.id).await.map_err(ApiError)?;
+    let batch = state
+        .batch_service
+        .get(&ctx, path.id)
+        .await
+        .map_err(ApiError)?;
     Ok(Json(batch))
 }
 

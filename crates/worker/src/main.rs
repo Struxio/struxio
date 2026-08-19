@@ -1,22 +1,20 @@
 use aws_credential_types::Credentials;
 use aws_sdk_s3::config::Region;
 use aws_sdk_s3::Client as S3Client;
-use struxio_common::JobExecutionContext;
-use struxio_core::{
-    gemini::GeminiClient,
-    queue::{ExtractionJob, QueueConsumer},
-    queue::redis::RedisConsumer,
-    storage::StorageClient,
-};
-use struxio_db::repositories::{
-    batch_jobs::BatchJobRepo,
-    documents::DocumentRepo,
-    extractions::ExtractionRepo,
-    templates::TemplateRepo,
-};
 use sqlx::PgPool;
 use std::time::Duration;
 use struxio_common::mime::normalize_mime_type;
+use struxio_common::JobExecutionContext;
+use struxio_core::{
+    gemini::GeminiClient,
+    queue::redis::RedisConsumer,
+    queue::{ExtractionJob, QueueConsumer},
+    storage::StorageClient,
+};
+use struxio_db::repositories::{
+    batch_jobs::BatchJobRepo, documents::DocumentRepo, extractions::ExtractionRepo,
+    templates::TemplateRepo,
+};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -34,11 +32,8 @@ async fn main() -> anyhow::Result<()> {
 
     let redis = redis::Client::open(config.redis_url.as_str())?;
 
-    let credentials = Credentials::from_keys(
-        &config.s3_access_key_id,
-        &config.s3_secret_access_key,
-        None,
-    );
+    let credentials =
+        Credentials::from_keys(&config.s3_access_key_id, &config.s3_secret_access_key, None);
 
     let s3_config = aws_sdk_s3::Config::builder()
         .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())

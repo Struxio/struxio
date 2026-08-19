@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use struxio_common::{AppError, PrincipalContext, PrincipalId, WorkspaceId, LOCAL_WORKSPACE_SLUG};
 use sqlx::{PgPool, Row};
+use struxio_common::{AppError, PrincipalContext, PrincipalId, WorkspaceId, LOCAL_WORKSPACE_SLUG};
 
-fn decode_id<E: std::error::Error + Send + Sync + 'static>(
-    column: &str,
-    err: E,
-) -> sqlx::Error {
+fn decode_id<E: std::error::Error + Send + Sync + 'static>(column: &str, err: E) -> sqlx::Error {
     sqlx::Error::ColumnDecode {
         index: column.into(),
         source: Box::new(err),
@@ -38,10 +35,10 @@ impl WorkspaceRepo {
         .fetch_one(pool)
         .await?;
 
-        let workspace_id = WorkspaceId::new(row.get("workspace_id"))
-            .map_err(|e| decode_id("workspace_id", e))?;
-        let principal_id = PrincipalId::new(row.get("principal_id"))
-            .map_err(|e| decode_id("principal_id", e))?;
+        let workspace_id =
+            WorkspaceId::new(row.get("workspace_id")).map_err(|e| decode_id("workspace_id", e))?;
+        let principal_id =
+            PrincipalId::new(row.get("principal_id")).map_err(|e| decode_id("principal_id", e))?;
         let scopes: Vec<String> = row.get("scopes");
         Ok(PrincipalContext::new(
             workspace_id,
@@ -51,8 +48,8 @@ impl WorkspaceRepo {
     }
 
     pub async fn load_local_principal_or_err(pool: &PgPool) -> Result<PrincipalContext, AppError> {
-        Self::load_local_principal(pool)
-            .await
-            .map_err(|e| AppError::Internal(format!("failed to load local workspace principal: {e}")))
+        Self::load_local_principal(pool).await.map_err(|e| {
+            AppError::Internal(format!("failed to load local workspace principal: {e}"))
+        })
     }
 }

@@ -81,7 +81,11 @@ async fn duplicate_md5_rejected_inside_one_workspace() {
     .execute(&pool)
     .await
     .expect_err("duplicate hash in the same workspace must fail");
-    assert!(err.to_string().contains("documents_workspace_id_md5_hash_key") || err.to_string().contains("duplicate"));
+    assert!(
+        err.to_string()
+            .contains("documents_workspace_id_md5_hash_key")
+            || err.to_string().contains("duplicate")
+    );
 }
 
 #[tokio::test]
@@ -100,13 +104,12 @@ async fn composite_fk_rejects_cross_workspace_document_reference() {
     .await
     .unwrap();
 
-    let template_id: Uuid = sqlx::query_scalar(
-        "SELECT id FROM extraction_templates WHERE workspace_id = $1 LIMIT 1",
-    )
-    .bind(LOCAL_WORKSPACE_UUID)
-    .fetch_one(&pool)
-    .await
-    .expect("local system template");
+    let template_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM extraction_templates WHERE workspace_id = $1 LIMIT 1")
+            .bind(LOCAL_WORKSPACE_UUID)
+            .fetch_one(&pool)
+            .await
+            .expect("local system template");
 
     // Copy a template into the other workspace so template_id FK can be satisfied
     // while the document stays in the local workspace.
@@ -130,7 +133,8 @@ async fn composite_fk_rejects_cross_workspace_document_reference() {
     .await
     .expect_err("cross-workspace document FK must fail");
     assert!(
-        err.to_string().contains("extractions_workspace_document_fkey")
+        err.to_string()
+            .contains("extractions_workspace_document_fkey")
             || err.to_string().to_lowercase().contains("foreign key")
     );
 
@@ -154,13 +158,12 @@ async fn nil_workspace_id_is_rejected() {
 #[tokio::test]
 async fn deleting_batch_clears_only_batch_reference() {
     let pool = connect().await;
-    let template_id: Uuid = sqlx::query_scalar(
-        "SELECT id FROM extraction_templates WHERE workspace_id = $1 LIMIT 1",
-    )
-    .bind(LOCAL_WORKSPACE_UUID)
-    .fetch_one(&pool)
-    .await
-    .expect("local system template");
+    let template_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM extraction_templates WHERE workspace_id = $1 LIMIT 1")
+            .bind(LOCAL_WORKSPACE_UUID)
+            .fetch_one(&pool)
+            .await
+            .expect("local system template");
 
     let doc_id: Uuid = sqlx::query_scalar(
         "INSERT INTO documents (workspace_id, md5_hash, file_name, file_type, s3_key, size_bytes) \
@@ -203,13 +206,12 @@ async fn deleting_batch_clears_only_batch_reference() {
         .await
         .expect("batch deletion should preserve the extraction");
 
-    let (workspace_id, batch_job_id): (Uuid, Option<Uuid>) = sqlx::query_as(
-        "SELECT workspace_id, batch_job_id FROM extractions WHERE id = $1",
-    )
-    .bind(extraction_id)
-    .fetch_one(&pool)
-    .await
-    .expect("preserved extraction");
+    let (workspace_id, batch_job_id): (Uuid, Option<Uuid>) =
+        sqlx::query_as("SELECT workspace_id, batch_job_id FROM extractions WHERE id = $1")
+            .bind(extraction_id)
+            .fetch_one(&pool)
+            .await
+            .expect("preserved extraction");
     assert_eq!(workspace_id, LOCAL_WORKSPACE_UUID);
     assert!(batch_job_id.is_none());
 }

@@ -1,9 +1,9 @@
+use sqlx::PgPool;
 use struxio_common::models::{
     CheckDocumentRequest, CheckDocumentResponse, ConfirmUploadRequest, Document,
 };
 use struxio_common::{mime::normalize_mime_type, AppError, PrincipalContext};
 use struxio_db::repositories::documents::DocumentRepo;
-use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::storage::StorageClient;

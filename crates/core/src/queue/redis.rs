@@ -129,11 +129,7 @@ impl QueueConsumer for RedisConsumer {
             .await?;
 
         let entry = match result {
-            Some(reply) => reply
-                .keys
-                .first()
-                .and_then(|k| k.ids.first())
-                .cloned(),
+            Some(reply) => reply.keys.first().and_then(|k| k.ids.first()).cloned(),
             None => return Ok(None),
         };
 

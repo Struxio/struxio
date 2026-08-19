@@ -145,12 +145,7 @@ impl GeminiClient {
             self.model, self.api_key
         );
 
-        let resp = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?;
+        let resp = self.client.post(&url).json(&request).send().await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -205,9 +200,12 @@ mod tests {
     #[test]
     fn builds_client_with_configured_request_timeout() {
         let timeout = Duration::from_secs(45);
-        let client =
-            GeminiClient::new("test-key".to_string(), "gemini-2.5-flash".to_string(), timeout)
-                .expect("test client should build");
+        let client = GeminiClient::new(
+            "test-key".to_string(),
+            "gemini-2.5-flash".to_string(),
+            timeout,
+        )
+        .expect("test client should build");
 
         assert_eq!(client.request_timeout(), timeout);
     }

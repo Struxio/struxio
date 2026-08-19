@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::canonical::canonical_json;
 use crate::capabilities::{BackendCompatibility, BackendDescriptor};
 use crate::error::ContractError;
 use crate::evaluation::{EvalThresholds, FixtureDescriptor};
@@ -130,7 +129,7 @@ impl<'de> Deserialize<'de> for ExtractionContract {
         }
 
         let wire = WireContract::deserialize(deserializer)?;
-        let expected = hash_contract(wire.identity.slug(), wire.identity.version(), &wire.spec);
+        let expected = hash_contract(&wire.spec);
         if expected != wire.identity.content_hash() {
             return Err(serde::de::Error::custom(
                 "content hash does not match canonical contract semantics",
@@ -186,7 +185,7 @@ impl CandidateEvaluation {
 
 impl ExtractionContract {
     pub fn new(slug: ContractSlug, version: PositiveVersion, spec: ContractSpec) -> Self {
-        let content_hash = hash_contract(&slug, version, &spec);
+        let content_hash = hash_contract(&spec);
         Self {
             identity: ContractIdentity::new(slug, version, content_hash),
             spec,
@@ -206,8 +205,7 @@ impl ExtractionContract {
     }
 
     pub fn verify_content_hash(&self) -> bool {
-        self.content_hash()
-            == hash_contract(self.identity.slug(), self.identity.version(), &self.spec)
+        self.content_hash() == hash_contract(&self.spec)
     }
 
     pub fn normalize_data(&self, data: &Value) -> Result<Value, NormalizationError> {
@@ -238,18 +236,11 @@ impl ExtractionContract {
     }
 }
 
-fn hash_contract(
-    slug: &ContractSlug,
-    version: PositiveVersion,
-    spec: &ContractSpec,
-) -> Sha256ContentHash {
+fn hash_contract(spec: &ContractSpec) -> Sha256ContentHash {
     let semantic = serde_json::json!({
         "canonical_hash_version": CANONICAL_HASH_VERSION,
-        "slug": slug,
-        "version": version,
         "spec": spec,
     });
-    let _ = canonical_json(&semantic).expect("contract domain values are serializable");
     semantic_sha256(&semantic)
 }
 

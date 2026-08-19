@@ -1,6 +1,6 @@
+use sqlx::{PgPool, Row};
 use struxio_common::models::Document;
 use struxio_common::WorkspaceId;
-use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use super::workspace_id_of;
@@ -57,6 +57,7 @@ impl DocumentRepo {
         row.map(row_to_document).transpose()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         pool: &PgPool,
         workspace_id: WorkspaceId,

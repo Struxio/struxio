@@ -1,6 +1,6 @@
+use sqlx::{PgPool, Row};
 use struxio_common::models::BatchJob;
 use struxio_common::WorkspaceId;
-use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use super::workspace_id_of;

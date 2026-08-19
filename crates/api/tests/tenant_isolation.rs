@@ -25,8 +25,15 @@ async fn connect() -> PgPool {
     pool
 }
 
-fn principal_for(workspace: WorkspaceId, scopes: impl IntoIterator<Item = Scope>) -> PrincipalContext {
-    PrincipalContext::new(workspace, PrincipalId::local(), ScopeSet::from_scopes(scopes))
+fn principal_for(
+    workspace: WorkspaceId,
+    scopes: impl IntoIterator<Item = Scope>,
+) -> PrincipalContext {
+    PrincipalContext::new(
+        workspace,
+        PrincipalId::local(),
+        ScopeSet::from_scopes(scopes),
+    )
 }
 
 #[test]
@@ -101,7 +108,10 @@ async fn repository_find_does_not_return_other_workspace_rows() {
     let still_there = DocumentRepo::find_by_id(&pool, local, doc.id)
         .await
         .unwrap();
-    assert!(still_there.is_some(), "owner workspace must still see the document");
+    assert!(
+        still_there.is_some(),
+        "owner workspace must still see the document"
+    );
 }
 
 #[tokio::test]

@@ -22,7 +22,12 @@ async fn connect() -> PgPool {
 #[tokio::test]
 async fn tenant_tables_have_non_null_workspace_id() {
     let pool = connect().await;
-    let tables = ["documents", "extraction_templates", "extractions", "batch_jobs"];
+    let tables = [
+        "documents",
+        "extraction_templates",
+        "extractions",
+        "batch_jobs",
+    ];
     for table in tables {
         let row: (String, String) = sqlx::query_as(
             "SELECT is_nullable, data_type FROM information_schema.columns \
@@ -91,5 +96,8 @@ async fn document_hash_unique_is_workspace_local() {
     .fetch_optional(&pool)
     .await
     .unwrap();
-    assert!(global.is_none(), "global md5 unique constraint must be dropped");
+    assert!(
+        global.is_none(),
+        "global md5 unique constraint must be dropped"
+    );
 }

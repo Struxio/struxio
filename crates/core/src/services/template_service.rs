@@ -1,7 +1,7 @@
+use sqlx::PgPool;
 use struxio_common::models::{CreateTemplateRequest, ExtractionTemplate, UpdateTemplateRequest};
 use struxio_common::{AppError, PrincipalContext};
 use struxio_db::repositories::templates::TemplateRepo;
-use sqlx::PgPool;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -65,7 +65,9 @@ impl TemplateService {
             .ok_or_else(|| AppError::NotFound("Template not found".to_string()))?;
 
         if existing.is_system {
-            return Err(AppError::Forbidden("Cannot update system templates".to_string()));
+            return Err(AppError::Forbidden(
+                "Cannot update system templates".to_string(),
+            ));
         }
 
         TemplateRepo::update(
@@ -92,7 +94,9 @@ impl TemplateService {
             .ok_or_else(|| AppError::NotFound("Template not found".to_string()))?;
 
         if existing.is_system {
-            return Err(AppError::Forbidden("Cannot delete system templates".to_string()));
+            return Err(AppError::Forbidden(
+                "Cannot delete system templates".to_string(),
+            ));
         }
 
         TemplateRepo::delete(&self.db, ctx.workspace_id(), template_id)
@@ -105,10 +109,14 @@ impl TemplateService {
             .as_object()
             .ok_or_else(|| AppError::Validation("json_schema must be a JSON object".to_string()))?;
         if !obj.contains_key("type") {
-            return Err(AppError::Validation("json_schema must have a 'type' field".to_string()));
+            return Err(AppError::Validation(
+                "json_schema must have a 'type' field".to_string(),
+            ));
         }
         if !obj.contains_key("properties") {
-            return Err(AppError::Validation("json_schema must have a 'properties' field".to_string()));
+            return Err(AppError::Validation(
+                "json_schema must have a 'properties' field".to_string(),
+            ));
         }
         Ok(())
     }

@@ -16,11 +16,7 @@ pub async fn list_templates(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ExtractionTemplate>>, ApiError> {
     require_scope(&ctx, Scope::TemplatesRead).map_err(ApiError)?;
-    let templates = state
-        .template_service
-        .list(&ctx)
-        .await
-        .map_err(ApiError)?;
+    let templates = state.template_service.list(&ctx).await.map_err(ApiError)?;
     Ok(Json(templates))
 }
 

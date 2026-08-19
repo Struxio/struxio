@@ -1,12 +1,10 @@
+use sqlx::PgPool;
 use struxio_common::models::{BatchJob, CreateBatchRequest, Extraction};
 use struxio_common::{AppError, PrincipalContext};
 use struxio_db::repositories::{
-    batch_jobs::BatchJobRepo,
-    documents::DocumentRepo,
-    extractions::ExtractionRepo,
+    batch_jobs::BatchJobRepo, documents::DocumentRepo, extractions::ExtractionRepo,
     templates::TemplateRepo,
 };
-use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::queue::QueueProducer;
@@ -35,7 +33,9 @@ impl<Q: QueueProducer> BatchService<Q> {
 
         let total_documents = request.document_ids.len() as i32;
         if total_documents == 0 {
-            return Err(AppError::Validation("document_ids must not be empty".to_string()));
+            return Err(AppError::Validation(
+                "document_ids must not be empty".to_string(),
+            ));
         }
 
         let batch = BatchJobRepo::create(

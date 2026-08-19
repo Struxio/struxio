@@ -1,7 +1,7 @@
-use struxio_common::models::Extraction;
-use struxio_common::WorkspaceId;
 use serde_json::Value;
 use sqlx::{PgPool, Row};
+use struxio_common::models::Extraction;
+use struxio_common::WorkspaceId;
 use uuid::Uuid;
 
 use super::workspace_id_of;
@@ -185,6 +185,7 @@ impl ExtractionRepo {
         row_to_extraction(row)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_completed(
         pool: &PgPool,
         workspace_id: WorkspaceId,

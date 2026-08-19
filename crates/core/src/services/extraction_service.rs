@@ -1,13 +1,11 @@
+use sqlx::PgPool;
 use struxio_common::models::{
     CreateExtractionRequest, Extraction, ExtractionTemplate, InlineExtractionRequest,
 };
 use struxio_common::{mime::normalize_mime_type, AppError, PrincipalContext};
 use struxio_db::repositories::{
-    documents::DocumentRepo,
-    extractions::ExtractionRepo,
-    templates::TemplateRepo,
+    documents::DocumentRepo, extractions::ExtractionRepo, templates::TemplateRepo,
 };
-use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::gemini::GeminiClient;
@@ -23,13 +21,13 @@ pub struct ExtractionService<Q: QueueProducer> {
 }
 
 impl<Q: QueueProducer> ExtractionService<Q> {
-    pub fn new(
-        db: PgPool,
-        queue: Q,
-        storage: StorageClient,
-        gemini: GeminiClient,
-    ) -> Self {
-        Self { db, queue, storage, gemini }
+    pub fn new(db: PgPool, queue: Q, storage: StorageClient, gemini: GeminiClient) -> Self {
+        Self {
+            db,
+            queue,
+            storage,
+            gemini,
+        }
     }
 
     pub async fn create(
@@ -91,8 +89,8 @@ impl<Q: QueueProducer> ExtractionService<Q> {
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Template not found".to_string()))?;
 
-        let mime_type = normalize_mime_type(&doc.file_type)
-            .map_err(|e| AppError::Validation(e.to_string()))?;
+        let mime_type =
+            normalize_mime_type(&doc.file_type).map_err(|e| AppError::Validation(e.to_string()))?;
 
         let extraction = ExtractionRepo::create_with_status(
             &self.db,
@@ -114,7 +112,12 @@ impl<Q: QueueProducer> ExtractionService<Q> {
         let start = std::time::Instant::now();
         match self
             .gemini
-            .extract(&file_bytes, mime_type, &template.prompt_template, &template.json_schema)
+            .extract(
+                &file_bytes,
+                mime_type,
+                &template.prompt_template,
+                &template.json_schema,
+            )
             .await
         {
             Ok(response) => {

@@ -72,10 +72,7 @@ mod tests {
 
     #[test]
     fn uses_safe_timeout_for_missing_or_invalid_values() {
-        assert_eq!(
-            parse_timeout_secs(None),
-            DEFAULT_GEMINI_TIMEOUT_SECS
-        );
+        assert_eq!(parse_timeout_secs(None), DEFAULT_GEMINI_TIMEOUT_SECS);
         assert_eq!(
             parse_timeout_secs(Some("0".to_string())),
             DEFAULT_GEMINI_TIMEOUT_SECS

@@ -30,6 +30,9 @@ pub fn oss_router() -> Router<AppState> {
                 .route("/check", post(documents::check_document))
                 .route("/confirm", post(documents::confirm_upload))
                 .route("/", get(documents::list_documents))
-                .route("/{id}", get(documents::get_document).delete(documents::delete_document)),
+                .route(
+                    "/{id}",
+                    get(documents::get_document).delete(documents::delete_document),
+                ),
         )
 }

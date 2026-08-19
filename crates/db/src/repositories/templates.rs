@@ -1,7 +1,7 @@
-use struxio_common::models::ExtractionTemplate;
-use struxio_common::WorkspaceId;
 use serde_json::Value;
 use sqlx::{PgPool, Row};
+use struxio_common::models::ExtractionTemplate;
+use struxio_common::WorkspaceId;
 use uuid::Uuid;
 
 use super::workspace_id_of;
@@ -50,12 +50,11 @@ impl TemplateRepo {
         prompt_template: &str,
         is_system: bool,
     ) -> Result<ExtractionTemplate, sqlx::Error> {
-        let json_value = serde_json::to_value(json_schema).map_err(|e| {
-            sqlx::Error::ColumnDecode {
+        let json_value =
+            serde_json::to_value(json_schema).map_err(|e| sqlx::Error::ColumnDecode {
                 index: "json_schema".into(),
                 source: Box::new(e),
-            }
-        })?;
+            })?;
 
         let row = sqlx::query(&format!(
             "INSERT INTO extraction_templates (workspace_id, name, description, json_schema, prompt_template, is_system) \

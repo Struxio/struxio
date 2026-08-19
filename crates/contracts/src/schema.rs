@@ -28,10 +28,10 @@ impl std::error::Error for SchemaError {}
 pub struct JsonSchema(Value);
 
 impl JsonSchema {
-    /// Rejects non-schema values and schemas the `jsonschema` crate cannot compile.
+    /// Rejects non-object schemas and schemas the `jsonschema` crate cannot compile.
     pub fn new(schema: Value) -> Result<Self, SchemaError> {
-        if !schema.is_object() && !schema.is_boolean() {
-            return Err(SchemaError::new("json schema must be an object or boolean"));
+        if !schema.is_object() {
+            return Err(SchemaError::new("json schema must be an object"));
         }
         jsonschema::validator_for(&schema).map_err(|error| SchemaError::new(error.to_string()))?;
         Ok(Self(schema))
