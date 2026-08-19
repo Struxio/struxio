@@ -11,7 +11,7 @@ pub struct ExtractionRepo;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimResult {
-    Claimed,
+    Claimed { attempt: u32 },
     AlreadyTerminal,
     AlreadyProcessing,
 }
@@ -180,7 +180,7 @@ impl ExtractionRepo {
         let updated = sqlx::query(
             "UPDATE extractions
              SET status = 'processing',
-                 attempt_count = GREATEST(attempt_count, $3),
+                 attempt_count = GREATEST(attempt_count + 1, $3),
                  last_attempt_at = now(),
                  next_retry_at = NULL,
                  last_error_class = NULL
@@ -190,7 +190,7 @@ impl ExtractionRepo {
                    OR (status = 'processing'
                        AND (last_attempt_at IS NULL OR last_attempt_at < $4))
                )
-             RETURNING id",
+             RETURNING attempt_count",
         )
         .bind(workspace_id.as_uuid())
         .bind(id)
@@ -199,8 +199,10 @@ impl ExtractionRepo {
         .fetch_optional(pool)
         .await?;
 
-        if updated.is_some() {
-            return Ok(ClaimResult::Claimed);
+        if let Some(row) = updated {
+            return Ok(ClaimResult::Claimed {
+                attempt: row.get::<i32, _>("attempt_count").max(1) as u32,
+            });
         }
 
         let status: Option<String> = sqlx::query_scalar(

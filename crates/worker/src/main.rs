@@ -139,7 +139,7 @@ async fn handle_job(
         - chrono::Duration::from_std(visibility_timeout)
             .map_err(|error| anyhow::anyhow!("visibility timeout: {error}"))?;
 
-    match ExtractionRepo::claim_for_processing(
+    let claimed_attempt = match ExtractionRepo::claim_for_processing(
         pool,
         job.workspace_id,
         job.extraction_id,
@@ -159,14 +159,20 @@ async fn handle_job(
             consumer.ack(&job.stream_id).await?;
             return Ok(());
         }
-        ClaimResult::Claimed => {}
-    }
+        ClaimResult::Claimed { attempt } => attempt,
+    };
+    // Postgres is authoritative for attempts because a reclaimed pending
+    // stream entry has the original payload attempt number.
+    let claimed_job = ExtractionJob {
+        attempt: claimed_attempt,
+        ..job.clone()
+    };
 
-    let failure = match process_claimed_extraction(job, pool, storage, gemini).await {
+    let failure = match process_claimed_extraction(&claimed_job, pool, storage, gemini).await {
         Ok(()) => None,
         Err(error) => Some(error),
     };
-    let settlement = settlement_for(job, failure.as_ref(), retry_policy);
+    let settlement = settlement_for(&claimed_job, failure.as_ref(), retry_policy);
 
     match &settlement {
         Settlement::Ack => {
@@ -182,14 +188,14 @@ async fn handle_job(
                     .map_err(|error| anyhow::anyhow!("retry delay: {error}"))?;
             ExtractionRepo::mark_retry(
                 pool,
-                job.workspace_id,
-                job.extraction_id,
+                claimed_job.workspace_id,
+                claimed_job.extraction_id,
                 "transient",
                 &failure.reason,
                 next_retry_at,
             )
             .await?;
-            refresh_batch_progress_if_needed(pool, job).await?;
+            refresh_batch_progress_if_needed(pool, &claimed_job).await?;
         }
         Settlement::DeadLetter { .. } => {
             let failure = failure
@@ -201,17 +207,17 @@ async fn handle_job(
             };
             ExtractionRepo::fail_idempotent(
                 pool,
-                job.workspace_id,
-                job.extraction_id,
+                claimed_job.workspace_id,
+                claimed_job.extraction_id,
                 &failure.reason,
                 class,
             )
             .await?;
-            refresh_batch_progress_if_needed(pool, job).await?;
+            refresh_batch_progress_if_needed(pool, &claimed_job).await?;
         }
     }
 
-    apply_settlement(consumer, job, settlement).await?;
+    apply_settlement(consumer, &claimed_job, settlement).await?;
     Ok(())
 }
 
