@@ -150,3 +150,66 @@ async fn nil_workspace_id_is_rejected() {
             || err.to_string().to_lowercase().contains("check")
     );
 }
+
+#[tokio::test]
+async fn deleting_batch_clears_only_batch_reference() {
+    let pool = connect().await;
+    let template_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM extraction_templates WHERE workspace_id = $1 LIMIT 1",
+    )
+    .bind(LOCAL_WORKSPACE_UUID)
+    .fetch_one(&pool)
+    .await
+    .expect("local system template");
+
+    let doc_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO documents (workspace_id, md5_hash, file_name, file_type, s3_key, size_bytes) \
+         VALUES ($1, $2, 'batch.pdf', 'application/pdf', $3, 1) RETURNING id",
+    )
+    .bind(LOCAL_WORKSPACE_UUID)
+    .bind(format!("batch-delete-{}", Uuid::new_v4().simple()))
+    .bind(format!("batch-delete/{}", Uuid::new_v4()))
+    .fetch_one(&pool)
+    .await
+    .expect("document");
+
+    let batch_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO batch_jobs (workspace_id, template_id, total_documents) \
+         VALUES ($1, $2, 1) RETURNING id",
+    )
+    .bind(LOCAL_WORKSPACE_UUID)
+    .bind(template_id)
+    .fetch_one(&pool)
+    .await
+    .expect("batch");
+
+    let extraction_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO extractions \
+         (workspace_id, document_id, template_id, batch_job_id, status) \
+         VALUES ($1, $2, $3, $4, 'pending') RETURNING id",
+    )
+    .bind(LOCAL_WORKSPACE_UUID)
+    .bind(doc_id)
+    .bind(template_id)
+    .bind(batch_id)
+    .fetch_one(&pool)
+    .await
+    .expect("extraction");
+
+    sqlx::query("DELETE FROM batch_jobs WHERE workspace_id = $1 AND id = $2")
+        .bind(LOCAL_WORKSPACE_UUID)
+        .bind(batch_id)
+        .execute(&pool)
+        .await
+        .expect("batch deletion should preserve the extraction");
+
+    let (workspace_id, batch_job_id): (Uuid, Option<Uuid>) = sqlx::query_as(
+        "SELECT workspace_id, batch_job_id FROM extractions WHERE id = $1",
+    )
+    .bind(extraction_id)
+    .fetch_one(&pool)
+    .await
+    .expect("preserved extraction");
+    assert_eq!(workspace_id, LOCAL_WORKSPACE_UUID);
+    assert!(batch_job_id.is_none());
+}

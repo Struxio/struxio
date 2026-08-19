@@ -94,7 +94,7 @@ ALTER TABLE extractions
     ADD CONSTRAINT extractions_workspace_batch_job_fkey
         FOREIGN KEY (workspace_id, batch_job_id)
         REFERENCES batch_jobs (workspace_id, id)
-        ON DELETE SET NULL;
+        ON DELETE SET NULL (batch_job_id);
 
 ALTER TABLE batch_jobs
     ADD CONSTRAINT batch_jobs_workspace_template_fkey
