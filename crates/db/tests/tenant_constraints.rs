@@ -33,7 +33,7 @@ async fn insert_workspace(pool: &PgPool, id: Uuid, slug: &str) {
 #[tokio::test]
 async fn same_md5_allowed_in_two_workspaces() {
     let pool = connect().await;
-    let other = Uuid::from_u128(0x1111_2222_4333_8444_1555_6666_7777_8888);
+    let other = Uuid::new_v4();
     insert_workspace(&pool, other, &format!("other-{}", other.simple())).await;
 
     let hash = format!("md5-{}", Uuid::new_v4().simple());
@@ -91,7 +91,7 @@ async fn duplicate_md5_rejected_inside_one_workspace() {
 #[tokio::test]
 async fn composite_fk_rejects_cross_workspace_document_reference() {
     let pool = connect().await;
-    let other = Uuid::from_u128(0xaaaa_bbbb_4ccc_8ddd_eeee_ffff_0000_1111);
+    let other = Uuid::new_v4();
     insert_workspace(&pool, other, &format!("fk-other-{}", other.simple())).await;
 
     let doc_id: Uuid = sqlx::query_scalar(

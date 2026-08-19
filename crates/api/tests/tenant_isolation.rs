@@ -64,8 +64,7 @@ fn local_operator_is_never_nil() {
 #[tokio::test]
 async fn repository_find_does_not_return_other_workspace_rows() {
     let pool = connect().await;
-    let other = WorkspaceId::new(Uuid::from_u128(0x9999_8888_4777_8666_1555_4444_3333_2222))
-        .expect("non-nil");
+    let other = WorkspaceId::new(Uuid::new_v4()).expect("non-nil");
 
     sqlx::query("INSERT INTO workspaces (id, slug, name) VALUES ($1, $2, $3)")
         .bind(other.as_uuid())
@@ -124,8 +123,7 @@ async fn templates_are_workspace_scoped() {
         "local workspace should own the backfilled system templates"
     );
 
-    let other = WorkspaceId::new(Uuid::from_u128(0x1234_1234_4234_8234_1234_1234_1234_1234))
-        .expect("non-nil");
+    let other = WorkspaceId::new(Uuid::new_v4()).expect("non-nil");
     sqlx::query("INSERT INTO workspaces (id, slug, name) VALUES ($1, $2, $3)")
         .bind(other.as_uuid())
         .bind(format!("tpl-{}", other.as_uuid().simple()))
