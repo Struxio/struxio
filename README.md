@@ -148,7 +148,7 @@ All config is via environment variables. Copy `.env.example` to `.env`.
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md). Rebuild: [docs/rebuild-rfc.md](./docs/rebuild-rfc.md) · [harness](./docs/rebuild-harness.md) · [review prompt](./docs/rebuild-review-prompt.md) · [landscape](./docs/rebuild-landscape.md).
 
 ## License
 
