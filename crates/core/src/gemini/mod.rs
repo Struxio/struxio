@@ -1,7 +1,19 @@
+use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use struxio_common::mime::normalize_mime_type;
+use struxio_contracts::BackendDescriptor;
+
+use crate::provider::{
+    structured_document_capabilities, ExtractionOutput, ExtractionProvider, ExtractionRequest,
+    ExtractionUsage, ProviderError,
+};
+
+/// Opaque provider id advertised by the Gemini adapter.
+pub const GEMINI_PROVIDER_ID: &str = "gemini";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeminiResponse {
     pub result: serde_json::Value,
@@ -19,12 +31,24 @@ pub enum GeminiError {
     Parse(String),
 }
 
+impl From<GeminiError> for ProviderError {
+    fn from(error: GeminiError) -> Self {
+        match error {
+            GeminiError::Http(inner) if inner.is_timeout() => ProviderError::Timeout,
+            GeminiError::Http(inner) => ProviderError::Backend(inner.to_string()),
+            GeminiError::Api(message) => ProviderError::Backend(message),
+            GeminiError::Parse(message) => ProviderError::StructuredOutput(message),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct GeminiClient {
     api_key: String,
     model: String,
     client: reqwest::Client,
     request_timeout: Duration,
+    identity: BackendDescriptor,
 }
 
 #[derive(Serialize)]
@@ -89,6 +113,33 @@ struct UsageMetadata {
     candidates_token_count: Option<i32>,
 }
 
+fn build_generate_request(
+    file_bytes: &[u8],
+    mime_type: &str,
+    instructions: &str,
+    json_schema: &serde_json::Value,
+) -> GeminiRequest {
+    GeminiRequest {
+        contents: vec![Content {
+            parts: vec![
+                Part::Text {
+                    text: instructions.to_string(),
+                },
+                Part::InlineData {
+                    inline_data: InlineData {
+                        mime_type: mime_type.to_string(),
+                        data: BASE64.encode(file_bytes),
+                    },
+                },
+            ],
+        }],
+        generation_config: GenerationConfig {
+            response_mime_type: "application/json".to_string(),
+            response_schema: json_schema.clone(),
+        },
+    }
+}
+
 impl GeminiClient {
     pub fn new(
         api_key: String,
@@ -98,12 +149,18 @@ impl GeminiClient {
         let client = reqwest::Client::builder()
             .timeout(request_timeout)
             .build()?;
+        let identity = BackendDescriptor::new(
+            GEMINI_PROVIDER_ID,
+            model.clone(),
+            structured_document_capabilities(),
+        );
 
         Ok(Self {
             api_key,
             model,
             client,
             request_timeout,
+            identity,
         })
     }
 
@@ -111,34 +168,14 @@ impl GeminiClient {
         self.request_timeout
     }
 
-    pub async fn extract(
+    async fn generate_content(
         &self,
         file_bytes: &[u8],
         mime_type: &str,
         prompt_template: &str,
         json_schema: &serde_json::Value,
     ) -> Result<GeminiResponse, GeminiError> {
-        let base64_data = BASE64.encode(file_bytes);
-
-        let request = GeminiRequest {
-            contents: vec![Content {
-                parts: vec![
-                    Part::Text {
-                        text: prompt_template.to_string(),
-                    },
-                    Part::InlineData {
-                        inline_data: InlineData {
-                            mime_type: mime_type.to_string(),
-                            data: base64_data,
-                        },
-                    },
-                ],
-            }],
-            generation_config: GenerationConfig {
-                response_mime_type: "application/json".to_string(),
-                response_schema: json_schema.clone(),
-            },
-        };
+        let request = build_generate_request(file_bytes, mime_type, prompt_template, json_schema);
 
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
@@ -192,9 +229,42 @@ impl GeminiClient {
     }
 }
 
+#[async_trait]
+impl ExtractionProvider for GeminiClient {
+    fn identity(&self) -> &BackendDescriptor {
+        &self.identity
+    }
+
+    async fn extract(
+        &self,
+        request: ExtractionRequest<'_>,
+    ) -> Result<ExtractionOutput, ProviderError> {
+        let mime_type = normalize_mime_type(request.mime_type)
+            .map_err(|error| ProviderError::UnsupportedMediaType(error.to_string()))?;
+
+        let response = self
+            .generate_content(
+                request.bytes,
+                mime_type,
+                request.instructions,
+                request.json_schema,
+            )
+            .await?;
+
+        Ok(ExtractionOutput {
+            result: response.result,
+            usage: ExtractionUsage {
+                input_tokens: response.input_tokens,
+                output_tokens: response.output_tokens,
+            },
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::GeminiClient;
+    use super::{build_generate_request, GeminiClient, GEMINI_PROVIDER_ID};
+    use crate::provider::ExtractionProvider;
     use std::time::Duration;
 
     #[test]
@@ -208,5 +278,36 @@ mod tests {
         .expect("test client should build");
 
         assert_eq!(client.request_timeout(), timeout);
+        assert_eq!(client.identity().provider_id(), GEMINI_PROVIDER_ID);
+        assert_eq!(client.identity().backend_id(), "gemini-2.5-flash");
+    }
+
+    #[test]
+    fn generate_request_asks_for_structured_json() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "invoice_number": { "type": "string" } }
+        });
+        let request = build_generate_request(
+            b"%PDF-1.4",
+            "application/pdf",
+            "Extract the invoice number.",
+            &schema,
+        );
+        let json = serde_json::to_value(request).expect("serialize gemini request");
+
+        assert_eq!(
+            json["generationConfig"]["responseMimeType"],
+            "application/json"
+        );
+        assert_eq!(json["generationConfig"]["responseSchema"], schema);
+        assert_eq!(
+            json["contents"][0]["parts"][1]["inline_data"]["mimeType"],
+            "application/pdf"
+        );
+        assert_eq!(
+            json["contents"][0]["parts"][0]["text"],
+            "Extract the invoice number."
+        );
     }
 }

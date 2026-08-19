@@ -2,11 +2,13 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::config::Region;
 use aws_sdk_s3::Client as S3Client;
 use sqlx::PgPool;
+use std::sync::Arc;
 use std::time::Duration;
 use struxio_common::mime::normalize_mime_type;
 use struxio_common::JobExecutionContext;
 use struxio_core::{
     gemini::GeminiClient,
+    provider::{ExtractionProvider, ExtractionRequest, SharedExtractionProvider},
     queue::redis::RedisConsumer,
     queue::{ExtractionJob, QueueConsumer},
     storage::StorageClient,
@@ -51,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
         config.gemini_model.clone(),
         Duration::from_secs(config.gemini_timeout_secs),
     )?;
+    let provider: SharedExtractionProvider = Arc::new(gemini);
 
     let consumer_name = format!("worker-{}", uuid::Uuid::new_v4());
     let consumer = RedisConsumer::new(redis, "workers".to_string(), consumer_name);
@@ -62,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
         match consumer.next_job().await {
             Ok(Some(job)) => {
                 tracing::info!(extraction_id = %job.extraction_id, workspace_id = %job.workspace_id, "Processing extraction");
-                match process_extraction(&job, &pool, &storage, &gemini).await {
+                match process_extraction(&job, &pool, &storage, provider.as_ref()).await {
                     Ok(()) => {
                         consumer.ack(&job.stream_id).await?;
                         tracing::info!(extraction_id = %job.extraction_id, "Extraction completed");
@@ -95,7 +98,7 @@ async fn process_extraction(
     job: &ExtractionJob,
     pool: &PgPool,
     storage: &StorageClient,
-    gemini: &GeminiClient,
+    provider: &dyn ExtractionProvider,
 ) -> anyhow::Result<()> {
     let ctx = JobExecutionContext::new(job.workspace_id);
     let workspace_id = ctx.workspace_id();
@@ -115,13 +118,13 @@ async fn process_extraction(
     let mime_type = normalize_mime_type(&doc.file_type)?;
 
     let start = std::time::Instant::now();
-    let response = gemini
-        .extract(
-            &file_bytes,
+    let response = provider
+        .extract(ExtractionRequest {
+            bytes: &file_bytes,
             mime_type,
-            &template.prompt_template,
-            &template.json_schema,
-        )
+            instructions: &template.prompt_template,
+            json_schema: &template.json_schema,
+        })
         .await?;
     let processing_time = start.elapsed().as_millis() as i32;
 
@@ -130,8 +133,8 @@ async fn process_extraction(
         workspace_id,
         job.extraction_id,
         &response.result,
-        response.input_tokens,
-        response.output_tokens,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
         Some(processing_time),
     )
     .await?;

@@ -48,5 +48,6 @@ rand = "0.8"
 base64 = "0.22"
 async-trait = "0.1"
 struxio-common = { path = "crates/common" }
+struxio-contracts = { path = "crates/contracts" }
 struxio-db = { path = "crates/db" }
 struxio-core = { path = "crates/core" }
