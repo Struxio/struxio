@@ -1,6 +1,6 @@
 # Commercial licensing
 
-Some users may need commercial terms when the AGPL-3.0-only terms do not fit their intended use, distribution, integration, or operating model, or when they need separately negotiated terms.
+AGPL-3.0-only permits commercial use subject to its terms. Some users may need alternative commercial terms when the AGPL requirements do not fit their intended distribution, integration, or operating model, or when they need separately negotiated terms.
 
 This file is informational only. It does not grant a commercial license or any other additional rights. Commercial terms, if offered, are available only through a separate written agreement with the copyright holder.
 

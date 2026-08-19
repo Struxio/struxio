@@ -4,6 +4,8 @@ Revisions through and including [`0f4bd171e08e586000c6f5668b3bebf9e20dcfa9`](htt
 
 Later revisions are offered under the GNU Affero General Public License, version 3.0 only (AGPL-3.0-only), whose text is in [LICENSE](./LICENSE).
 
-Alternative commercial terms are available only through a separate written agreement with the copyright holder, Lucas Coelho. This statement itself grants no additional rights.
+AGPL-3.0-only permits commercial use subject to its terms, including the network-source obligations in section 13. Alternative commercial terms are available only through a separate written agreement with the copyright holder, Lucas Coelho. This statement itself grants no additional rights.
 
 Third-party dependencies retain their own licenses. Review their package metadata and license notices for the terms that apply to those components.
+
+Before external contributions reopen or a proprietary cloud service directly links these crates, the project should have qualified counsel confirm the chain of title, contributor agreement, and commercial licensing structure.

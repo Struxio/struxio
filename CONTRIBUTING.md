@@ -2,7 +2,7 @@
 
 Thank you for your interest in contributing! Struxio is an open-core project — the core extraction engine and API are fully open source under AGPL-3.0-only.
 
-External code contributions are currently paused while the project selects a dual-licensing CLA process. Issues, documentation suggestions, and bug reports remain welcome.
+External contributions containing code, documentation, tests, migrations, or other copyrightable material are currently paused while the project selects a dual-licensing CLA process. Please do not submit pull requests or patches. Issues, feature requests, documentation suggestions, and bug reports remain welcome.
 
 ## What Belongs Here
 
@@ -118,4 +118,4 @@ Found a vulnerability? **Do not open a public issue.** Email security@struxio.co
 
 ## License
 
-External code contributions remain paused while the project selects a dual-licensing CLA process; please do not submit code pull requests until this notice is updated. A future CLA, once selected and published, must grant the project the rights needed to offer accepted contributions under both [AGPL-3.0-only](./LICENSE) and separate commercial terms. No CLA or contributor assignment is being requested by this notice. Issues, documentation suggestions, and bug reports remain welcome.
+External contributions containing copyrightable material remain paused while the project selects a dual-licensing CLA process. A future CLA, once selected and published, must grant the project the rights needed to offer accepted contributions under both [AGPL-3.0-only](./LICENSE) and separate commercial terms. No CLA, DCO, or contributor assignment is being requested by this notice.
