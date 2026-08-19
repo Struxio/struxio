@@ -3153,6 +3153,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "struxio-common",
+ "struxio-contracts",
  "struxio-db",
  "thiserror",
  "tokio",
