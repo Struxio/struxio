@@ -4,9 +4,9 @@
 
 **Open-source document data extraction API**
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](./LICENSE)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue.svg)](./LICENSING.md)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
+[![Issues Welcome](https://img.shields.io/badge/Issues-welcome-brightgreen.svg)](https://github.com/Struxio/struxio/issues)
 
 </div>
 
@@ -151,5 +151,4 @@ All config is via environment variables. Copy `.env.example` to `.env`.
 See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
-
-[AGPL-3.0](./LICENSE) — free to use, modify, and self-host.
+New revisions are offered under [AGPL-3.0-only](./LICENSE). Alternative commercial terms are available separately through a written agreement. Revisions through and including [`0f4bd171e08e586000c6f5668b3bebf9e20dcfa9`](https://github.com/Struxio/struxio/commit/0f4bd171e08e586000c6f5668b3bebf9e20dcfa9) remain under Apache-2.0. See [LICENSING.md](./LICENSING.md) for the licensing history.
