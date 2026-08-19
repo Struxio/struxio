@@ -29,7 +29,10 @@ pub struct NormalizerRule {
 
 impl NormalizerRule {
     pub fn new(pointer: JsonPointer, normalizer: Normalizer) -> Self {
-        Self { pointer, normalizer }
+        Self {
+            pointer,
+            normalizer,
+        }
     }
 
     pub fn pointer(&self) -> &JsonPointer {
@@ -90,7 +93,10 @@ fn apply_normalizer(
     match normalizer {
         Normalizer::TrimWhitespace => Ok(Value::String(string_value()?.trim().to_owned())),
         Normalizer::CollapseWhitespace => Ok(Value::String(
-            string_value()?.split_whitespace().collect::<Vec<_>>().join(" "),
+            string_value()?
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
         )),
         Normalizer::Lowercase => Ok(Value::String(string_value()?.to_lowercase())),
         Normalizer::Uppercase => Ok(Value::String(string_value()?.to_uppercase())),
@@ -139,7 +145,9 @@ fn parse_json_number(text: &str, pointer: &JsonPointer) -> Result<Value, Normali
     Ok(Value::Number(number))
 }
 
-fn pointer_error(pointer: &JsonPointer) -> impl FnOnce(JsonPointerError) -> NormalizationError + '_ {
+fn pointer_error(
+    pointer: &JsonPointer,
+) -> impl FnOnce(JsonPointerError) -> NormalizationError + '_ {
     move |error| NormalizationError {
         pointer: pointer.clone(),
         message: error.to_string(),
@@ -164,7 +172,10 @@ mod tests {
     #[test]
     fn strip_currency_and_date_are_deterministic() {
         let rules = [
-            NormalizerRule::new(JsonPointer::parse("/total").unwrap(), Normalizer::StripCurrency),
+            NormalizerRule::new(
+                JsonPointer::parse("/total").unwrap(),
+                Normalizer::StripCurrency,
+            ),
             NormalizerRule::new(
                 JsonPointer::parse("/date").unwrap(),
                 Normalizer::NormalizeDate {
@@ -186,7 +197,10 @@ mod tests {
     #[test]
     fn normalization_does_not_mutate_input() {
         let input = serde_json::json!({"name": " Ada "});
-        let rule = NormalizerRule::new(JsonPointer::parse("/name").unwrap(), Normalizer::TrimWhitespace);
+        let rule = NormalizerRule::new(
+            JsonPointer::parse("/name").unwrap(),
+            Normalizer::TrimWhitespace,
+        );
         let _ = normalize(&input, &[rule]).unwrap();
         assert_eq!(input, serde_json::json!({"name": " Ada "}));
     }

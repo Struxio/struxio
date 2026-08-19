@@ -36,7 +36,10 @@ impl ContractSlug {
             return Err(IdentityError::EmptySlug);
         }
         let valid = value.split('-').all(|part| {
-            !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
         });
         if !valid {
             return Err(IdentityError::InvalidSlug);
@@ -187,7 +190,11 @@ pub struct ContractIdentity {
 }
 
 impl ContractIdentity {
-    pub fn new(slug: ContractSlug, version: PositiveVersion, content_hash: Sha256ContentHash) -> Self {
+    pub fn new(
+        slug: ContractSlug,
+        version: PositiveVersion,
+        content_hash: Sha256ContentHash,
+    ) -> Self {
         Self {
             slug,
             version,
@@ -224,14 +231,23 @@ mod tests {
     #[test]
     fn slug_rejects_empty_and_uppercase() {
         assert_eq!(ContractSlug::new(""), Err(IdentityError::EmptySlug));
-        assert_eq!(ContractSlug::new("Invoice"), Err(IdentityError::InvalidSlug));
-        assert_eq!(ContractSlug::new("in--voice"), Err(IdentityError::InvalidSlug));
+        assert_eq!(
+            ContractSlug::new("Invoice"),
+            Err(IdentityError::InvalidSlug)
+        );
+        assert_eq!(
+            ContractSlug::new("in--voice"),
+            Err(IdentityError::InvalidSlug)
+        );
         assert!(ContractSlug::new("invoice-v2").is_ok());
     }
 
     #[test]
     fn version_must_be_positive() {
-        assert_eq!(PositiveVersion::new(0), Err(IdentityError::NonPositiveVersion));
+        assert_eq!(
+            PositiveVersion::new(0),
+            Err(IdentityError::NonPositiveVersion)
+        );
         assert_eq!(PositiveVersion::new(1).unwrap().get(), 1);
     }
 

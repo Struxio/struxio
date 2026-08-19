@@ -12,8 +12,12 @@ pub fn canonical_json(value: &Value) -> Result<Vec<u8>, serde_json::Error> {
 fn write_value<W: Write>(value: &Value, output: &mut W) -> Result<(), serde_json::Error> {
     match value {
         Value::Null => output.write_all(b"null").map_err(serde_json::Error::io),
-        Value::Bool(value) => output.write_all(if *value { b"true" } else { b"false" }).map_err(serde_json::Error::io),
-        Value::Number(value) => output.write_all(value.to_string().as_bytes()).map_err(serde_json::Error::io),
+        Value::Bool(value) => output
+            .write_all(if *value { b"true" } else { b"false" })
+            .map_err(serde_json::Error::io),
+        Value::Number(value) => output
+            .write_all(value.to_string().as_bytes())
+            .map_err(serde_json::Error::io),
         Value::String(value) => serde_json::to_writer(output, value),
         Value::Array(values) => {
             output.write_all(b"[").map_err(serde_json::Error::io)?;
@@ -29,7 +33,10 @@ fn write_value<W: Write>(value: &Value, output: &mut W) -> Result<(), serde_json
     }
 }
 
-fn write_object<W: Write>(values: &Map<String, Value>, output: &mut W) -> Result<(), serde_json::Error> {
+fn write_object<W: Write>(
+    values: &Map<String, Value>,
+    output: &mut W,
+) -> Result<(), serde_json::Error> {
     output.write_all(b"{").map_err(serde_json::Error::io)?;
     let mut keys = values.keys().collect::<Vec<_>>();
     keys.sort_unstable();
@@ -52,7 +59,10 @@ mod tests {
     fn object_key_order_does_not_change_canonical_bytes() {
         let first = serde_json::json!({"b": 2, "a": {"d": 4, "c": 3}});
         let second = serde_json::json!({"a": {"c": 3, "d": 4}, "b": 2});
-        assert_eq!(canonical_json(&first).unwrap(), canonical_json(&second).unwrap());
+        assert_eq!(
+            canonical_json(&first).unwrap(),
+            canonical_json(&second).unwrap()
+        );
     }
 
     #[test]

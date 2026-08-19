@@ -42,7 +42,8 @@ impl JsonPointer {
             return Err(JsonPointerError::MustStartWithSlash);
         }
         value
-            .split('/').skip(1)
+            .split('/')
+            .skip(1)
             .map(unescape_token)
             .collect::<Result<Vec<_>, _>>()
             .map(Self)
@@ -85,10 +86,14 @@ impl JsonPointer {
         let mut current = root;
         for token in parents {
             current = match current {
-                Value::Object(object) => object.get_mut(token).ok_or(JsonPointerError::CannotTraverse)?,
+                Value::Object(object) => object
+                    .get_mut(token)
+                    .ok_or(JsonPointerError::CannotTraverse)?,
                 Value::Array(array) => {
                     let index = array_index(token)?;
-                    array.get_mut(index).ok_or(JsonPointerError::CannotTraverse)?
+                    array
+                        .get_mut(index)
+                        .ok_or(JsonPointerError::CannotTraverse)?
                 }
                 Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
                     return Err(JsonPointerError::CannotTraverse)
@@ -98,13 +103,17 @@ impl JsonPointer {
 
         match current {
             Value::Object(object) => {
-                let target = object.get_mut(last).ok_or(JsonPointerError::CannotTraverse)?;
+                let target = object
+                    .get_mut(last)
+                    .ok_or(JsonPointerError::CannotTraverse)?;
                 *target = replacement;
                 Ok(())
             }
             Value::Array(array) => {
                 let index = array_index(last)?;
-                let target = array.get_mut(index).ok_or(JsonPointerError::CannotTraverse)?;
+                let target = array
+                    .get_mut(index)
+                    .ok_or(JsonPointerError::CannotTraverse)?;
                 *target = replacement;
                 Ok(())
             }
@@ -174,7 +183,9 @@ fn array_index(token: &str) -> Result<usize, JsonPointerError> {
     if token.is_empty() || (token.len() > 1 && token.starts_with('0')) || token == "-" {
         return Err(JsonPointerError::InvalidArrayIndex);
     }
-    token.parse().map_err(|_| JsonPointerError::InvalidArrayIndex)
+    token
+        .parse()
+        .map_err(|_| JsonPointerError::InvalidArrayIndex)
 }
 
 #[cfg(test)]
@@ -190,14 +201,26 @@ mod tests {
 
     #[test]
     fn rejects_bad_escape_and_prefix() {
-        assert_eq!(JsonPointer::parse("a/b"), Err(JsonPointerError::MustStartWithSlash));
-        assert_eq!(JsonPointer::parse("/a~2b"), Err(JsonPointerError::InvalidEscape));
+        assert_eq!(
+            JsonPointer::parse("a/b"),
+            Err(JsonPointerError::MustStartWithSlash)
+        );
+        assert_eq!(
+            JsonPointer::parse("/a~2b"),
+            Err(JsonPointerError::InvalidEscape)
+        );
     }
 
     #[test]
     fn resolves_object_and_array_values() {
         let value = serde_json::json!({"items": [{"value": 3}]});
-        assert_eq!(JsonPointer::parse("/items/0/value").unwrap().get(&value).unwrap(), Some(&serde_json::json!(3)));
+        assert_eq!(
+            JsonPointer::parse("/items/0/value")
+                .unwrap()
+                .get(&value)
+                .unwrap(),
+            Some(&serde_json::json!(3))
+        );
     }
 
     #[test]
@@ -205,6 +228,9 @@ mod tests {
         let pointer = JsonPointer::parse("/a~1b").unwrap();
         let encoded = serde_json::to_string(&pointer).unwrap();
         assert_eq!(encoded, r#""/a~1b""#);
-        assert_eq!(serde_json::from_str::<JsonPointer>(&encoded).unwrap(), pointer);
+        assert_eq!(
+            serde_json::from_str::<JsonPointer>(&encoded).unwrap(),
+            pointer
+        );
     }
 }

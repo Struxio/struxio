@@ -63,7 +63,11 @@ impl EvidenceEntry {
                 return Err(EvidenceError::new("evidence quote must not be empty"));
             }
         }
-        Ok(Self { kind, quote, source })
+        Ok(Self {
+            kind,
+            quote,
+            source,
+        })
     }
 
     pub fn kind(&self) -> EvidenceKind {
@@ -235,7 +239,10 @@ impl EvidenceReport {
     }
 
     pub fn is_satisfied(&self) -> bool {
-        !self.statuses.iter().any(|item| item.status.is_fail_closed())
+        !self
+            .statuses
+            .iter()
+            .any(|item| item.status.is_fail_closed())
     }
 }
 
@@ -291,7 +298,11 @@ fn path_status(
     }
 }
 
-pub fn check_policy(data: &Value, sidecar: &EvidenceSidecar, policy: &EvidencePolicy) -> EvidenceReport {
+pub fn check_policy(
+    data: &Value,
+    sidecar: &EvidenceSidecar,
+    policy: &EvidencePolicy,
+) -> EvidenceReport {
     let statuses = match policy {
         EvidencePolicy::None => Vec::new(),
         EvidencePolicy::Optional(paths) => paths
@@ -339,7 +350,10 @@ mod tests {
             &policy,
         );
         assert!(!report.is_satisfied());
-        assert_eq!(report.statuses()[0].status(), EvidenceCheckStatus::MissingRequired);
+        assert_eq!(
+            report.statuses()[0].status(),
+            EvidenceCheckStatus::MissingRequired
+        );
     }
 
     #[test]
@@ -351,7 +365,10 @@ mod tests {
             &policy,
         );
         assert!(!report.is_satisfied());
-        assert_eq!(report.statuses()[0].status(), EvidenceCheckStatus::Unavailable);
+        assert_eq!(
+            report.statuses()[0].status(),
+            EvidenceCheckStatus::Unavailable
+        );
     }
 
     #[test]
@@ -363,7 +380,10 @@ mod tests {
         );
         let policy = EvidencePolicy::required(vec![pointer]);
         let report = check_policy(&serde_json::json!({"total": 10}), &sidecar, &policy);
-        assert_eq!(report.statuses()[0].status(), EvidenceCheckStatus::InferredOnly);
+        assert_eq!(
+            report.statuses()[0].status(),
+            EvidenceCheckStatus::InferredOnly
+        );
         assert!(!report.is_satisfied());
     }
 

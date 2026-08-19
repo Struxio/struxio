@@ -30,8 +30,13 @@ pub enum Validator {
     Equals(Value),
     Minimum(f64),
     Maximum(f64),
-    Regex { pattern: String },
-    NumericTolerance { other: JsonPointer, tolerance: f64 },
+    Regex {
+        pattern: String,
+    },
+    NumericTolerance {
+        other: JsonPointer,
+        tolerance: f64,
+    },
     SumEquals {
         addends: Vec<JsonPointer>,
         tolerance: f64,
@@ -106,7 +111,10 @@ impl ValidationReport {
 
 /// Run `rules` in declaration order. Failures are collected, never short-circuited.
 pub fn validate(data: &Value, rules: &[ValidatorRule]) -> Vec<ValidationFailure> {
-    rules.iter().filter_map(|rule| validate_rule(data, rule)).collect()
+    rules
+        .iter()
+        .filter_map(|rule| validate_rule(data, rule))
+        .collect()
 }
 
 fn validate_rule(data: &Value, rule: &ValidatorRule) -> Option<ValidationFailure> {
@@ -123,7 +131,9 @@ fn validate_rule(data: &Value, rule: &ValidatorRule) -> Option<ValidationFailure
             None => Some(failure("value is required".to_owned())),
         },
         Validator::NonNull => match value {
-            Some(Value::Null) | None => Some(failure("value must not be null or missing".to_owned())),
+            Some(Value::Null) | None => {
+                Some(failure("value must not be null or missing".to_owned()))
+            }
             Some(_) => None,
         },
         Validator::NonEmptyString => match value {

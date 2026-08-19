@@ -117,7 +117,9 @@ mod tests {
             "properties": {"name": {"type": "string"}}
         }))
         .unwrap();
-        assert!(schema.validate(&serde_json::json!({"name": "Ada"})).is_valid());
+        assert!(schema
+            .validate(&serde_json::json!({"name": "Ada"}))
+            .is_valid());
         assert!(!schema.validate(&serde_json::json!({})).is_valid());
         assert!(!schema.validate(&serde_json::json!({"name": 1})).is_valid());
     }

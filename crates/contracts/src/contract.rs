@@ -206,7 +206,8 @@ impl ExtractionContract {
     }
 
     pub fn verify_content_hash(&self) -> bool {
-        self.content_hash() == hash_contract(self.identity.slug(), self.identity.version(), &self.spec)
+        self.content_hash()
+            == hash_contract(self.identity.slug(), self.identity.version(), &self.spec)
     }
 
     pub fn normalize_data(&self, data: &Value) -> Result<Value, NormalizationError> {
@@ -223,7 +224,10 @@ impl ExtractionContract {
         let normalized = self.normalize_data(data)?;
         Ok(CandidateEvaluation {
             schema: self.spec.schema.validate(&normalized),
-            validation: ValidationReport::from_failures(validate(&normalized, &self.spec.validators)),
+            validation: ValidationReport::from_failures(validate(
+                &normalized,
+                &self.spec.validators,
+            )),
             evidence: check_policy(&normalized, evidence, &self.spec.evidence_policy),
             normalized,
         })
@@ -286,25 +290,35 @@ mod tests {
 
     #[test]
     fn hash_ignores_object_key_order_in_schema() {
-        let first_schema = JsonSchema::new(serde_json::from_str(
-            r#"{"type":"object","properties":{"b":{"type":"number"},"a":{"type":"string"}}}"#,
+        let first_schema = JsonSchema::new(
+            serde_json::from_str(
+                r#"{"type":"object","properties":{"b":{"type":"number"},"a":{"type":"string"}}}"#,
+            )
+            .unwrap(),
         )
-        .unwrap())
         .unwrap();
-        let second_schema = JsonSchema::new(serde_json::from_str(
-            r#"{"properties":{"a":{"type":"string"},"b":{"type":"number"}},"type":"object"}"#,
+        let second_schema = JsonSchema::new(
+            serde_json::from_str(
+                r#"{"properties":{"a":{"type":"string"},"b":{"type":"number"}},"type":"object"}"#,
+            )
+            .unwrap(),
         )
-        .unwrap())
         .unwrap();
         let first = ExtractionContract::new(
             ContractSlug::new("ordered").unwrap(),
             PositiveVersion::new(1).unwrap(),
-            ContractSpec::new(first_schema, ProviderNeutralInstructions::new("task").unwrap()),
+            ContractSpec::new(
+                first_schema,
+                ProviderNeutralInstructions::new("task").unwrap(),
+            ),
         );
         let second = ExtractionContract::new(
             ContractSlug::new("ordered").unwrap(),
             PositiveVersion::new(1).unwrap(),
-            ContractSpec::new(second_schema, ProviderNeutralInstructions::new("task").unwrap()),
+            ContractSpec::new(
+                second_schema,
+                ProviderNeutralInstructions::new("task").unwrap(),
+            ),
         );
         assert_eq!(first.content_hash(), second.content_hash());
     }
@@ -328,7 +342,8 @@ mod tests {
     #[test]
     fn any_semantic_field_change_changes_the_hash() {
         let base = sample_contract();
-        let mut changed = sample_spec().with_eval(EvalThresholds::new(9_000, 9_000, 9_000, 100).unwrap());
+        let mut changed =
+            sample_spec().with_eval(EvalThresholds::new(9_000, 9_000, 9_000, 100).unwrap());
         let eval_changed = ExtractionContract::new(
             base.identity().slug().clone(),
             base.identity().version(),
