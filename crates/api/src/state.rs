@@ -49,8 +49,7 @@ impl AppState {
 
         let s3 = S3Client::from_conf(s3_config);
         let storage = StorageClient::new(s3, config.s3_bucket.clone());
-        let queue =
-            RedisProducer::with_max_attempts(redis.clone(), config.queue_max_attempts);
+        let queue = RedisProducer::with_max_attempts(redis.clone(), config.queue_max_attempts);
         let gemini = GeminiClient::new(
             config.gemini_api_key.clone(),
             config.gemini_model.clone(),
