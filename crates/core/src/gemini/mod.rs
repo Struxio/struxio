@@ -111,7 +111,7 @@ impl GeminiBackend {
 
         Ok(Self {
             api_key,
-            model,
+            model: model.clone(),
             client,
             request_timeout,
             descriptor: BackendDescriptor::new(
