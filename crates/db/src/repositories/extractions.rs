@@ -2,8 +2,10 @@ use serde_json::Value;
 use sqlx::{PgPool, Row};
 use struxio_common::models::Extraction;
 use struxio_common::WorkspaceId;
+use struxio_contracts::Sha256ContentHash;
 use uuid::Uuid;
 
+use super::wave2::content_hash_bytes;
 use super::workspace_id_of;
 
 pub struct ExtractionRepo;
@@ -69,6 +71,37 @@ impl ExtractionRepo {
         .bind(template_id)
         .bind(batch_job_id)
         .bind(status)
+        .fetch_one(pool)
+        .await?;
+
+        row_to_extraction(row)
+    }
+
+    /// Create an extraction tied to an immutable published contract version.
+    /// The contract hash participates in the composite FK, so a contract ID
+    /// cannot be reused across workspaces or silently repointed.
+    pub async fn create_with_contract(
+        pool: &PgPool,
+        workspace_id: WorkspaceId,
+        document_id: Uuid,
+        template_id: Uuid,
+        batch_job_id: Option<Uuid>,
+        contract_id: Uuid,
+        contract_content_sha256: Sha256ContentHash,
+    ) -> Result<Extraction, sqlx::Error> {
+        let row = sqlx::query(&format!(
+            "INSERT INTO extractions \
+             (workspace_id, document_id, template_id, batch_job_id, contract_id, \
+              contract_content_sha256, status) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'pending') \
+             RETURNING {SELECT_COLS}"
+        ))
+        .bind(workspace_id.as_uuid())
+        .bind(document_id)
+        .bind(template_id)
+        .bind(batch_job_id)
+        .bind(contract_id)
+        .bind(content_hash_bytes(contract_content_sha256))
         .fetch_one(pool)
         .await?;
 
