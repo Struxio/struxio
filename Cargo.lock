@@ -3182,6 +3182,7 @@ dependencies = [
  "aws-credential-types",
  "aws-sdk-s3",
  "dotenvy",
+ "rand 0.8.5",
  "redis",
  "serde_json",
  "sqlx",

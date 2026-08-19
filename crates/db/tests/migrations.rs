@@ -101,3 +101,17 @@ async fn document_hash_unique_is_workspace_local() {
         "global md5 unique constraint must be dropped"
     );
 }
+
+#[tokio::test]
+async fn extractions_have_non_negative_attempt() {
+    let pool = connect().await;
+    let row: (String, String) = sqlx::query_as(
+        "SELECT is_nullable, data_type FROM information_schema.columns \
+         WHERE table_name = 'extractions' AND column_name = 'attempt'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("attempt column");
+    assert_eq!(row.0, "NO");
+    assert_eq!(row.1, "integer");
+}

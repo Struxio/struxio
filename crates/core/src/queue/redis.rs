@@ -1,8 +1,16 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
 use async_trait::async_trait;
+use chrono::Utc;
+use redis::FromRedisValue;
 use struxio_common::WorkspaceId;
 use uuid::Uuid;
 
-use super::{ExtractionJob, QueueConsumer, QueueError, QueueProducer};
+use super::{
+    ExtractionJob, MalformedMessage, QueueConsumer, QueueError, QueueProducer, StreamDelivery,
+};
+use crate::jobs::{JobEnvelope, CONSUMER_GROUP, DELAYED_ZSET, DLQ_STREAM, READY_STREAM};
 
 // ── Producer ─────────────────────────────────────────────────────────────────
 
@@ -27,54 +35,22 @@ impl QueueProducer for RedisProducer {
         workspace_id: WorkspaceId,
         batch_job_id: Option<Uuid>,
     ) -> Result<(), QueueError> {
+        let envelope = JobEnvelope {
+            extraction_id,
+            document_id,
+            template_id,
+            workspace_id: workspace_id.as_uuid(),
+            batch_job_id,
+        };
         let mut conn = self.client.get_multiplexed_async_connection().await?;
-        let eid = extraction_id.to_string();
-        let did = document_id.to_string();
-        let tid = template_id.to_string();
-        let wid = workspace_id.as_uuid().to_string();
-
-        match batch_job_id {
-            Some(bid) => {
-                let bid_s = bid.to_string();
-                ::redis::cmd("XADD")
-                    .arg("extractions:queue")
-                    .arg("*")
-                    .arg("extraction_id")
-                    .arg(&eid)
-                    .arg("document_id")
-                    .arg(&did)
-                    .arg("template_id")
-                    .arg(&tid)
-                    .arg("workspace_id")
-                    .arg(&wid)
-                    .arg("batch_job_id")
-                    .arg(&bid_s)
-                    .query_async::<String>(&mut conn)
-                    .await?;
-            }
-            None => {
-                ::redis::cmd("XADD")
-                    .arg("extractions:queue")
-                    .arg("*")
-                    .arg("extraction_id")
-                    .arg(&eid)
-                    .arg("document_id")
-                    .arg(&did)
-                    .arg("template_id")
-                    .arg(&tid)
-                    .arg("workspace_id")
-                    .arg(&wid)
-                    .query_async::<String>(&mut conn)
-                    .await?;
-            }
-        }
-
+        xadd_envelope(&mut conn, READY_STREAM, &envelope).await?;
         Ok(())
     }
 }
 
 // ── Consumer ─────────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 pub struct RedisConsumer {
     client: ::redis::Client,
     group: String,
@@ -89,6 +65,160 @@ impl RedisConsumer {
             consumer,
         }
     }
+
+    pub fn for_workers(client: ::redis::Client, consumer: String) -> Self {
+        Self::new(client, CONSUMER_GROUP.to_string(), consumer)
+    }
+
+    /// Move due delayed jobs onto the ready stream. Duplicates are safe because
+    /// job execution is idempotent at the extraction row.
+    pub async fn promote_delayed(&self, limit: usize) -> Result<usize, QueueError> {
+        if limit == 0 {
+            return Ok(0);
+        }
+        let mut conn = self.client.get_multiplexed_async_connection().await?;
+        let now_ms = Utc::now().timestamp_millis();
+        let payloads: Vec<String> = ::redis::cmd("ZRANGEBYSCORE")
+            .arg(DELAYED_ZSET)
+            .arg(0)
+            .arg(now_ms)
+            .arg("LIMIT")
+            .arg(0)
+            .arg(limit)
+            .query_async(&mut conn)
+            .await?;
+
+        let mut promoted = 0usize;
+        for payload in payloads {
+            match JobEnvelope::from_delayed_payload(&payload) {
+                Ok(envelope) => {
+                    xadd_envelope(&mut conn, READY_STREAM, &envelope).await?;
+                }
+                Err(err) => {
+                    xadd_dlq_raw(
+                        &mut conn,
+                        "0-0",
+                        &[(String::from("payload"), payload.clone())],
+                        err.message(),
+                    )
+                    .await?;
+                }
+            }
+            let _: i32 = ::redis::cmd("ZREM")
+                .arg(DELAYED_ZSET)
+                .arg(&payload)
+                .query_async(&mut conn)
+                .await?;
+            promoted += 1;
+        }
+        Ok(promoted)
+    }
+
+    /// Read newly assigned jobs (`>`), blocking up to `block`.
+    pub async fn read_new(
+        &self,
+        count: usize,
+        block: Duration,
+    ) -> Result<Vec<StreamDelivery>, QueueError> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.client.get_multiplexed_async_connection().await?;
+        let result: Option<::redis::streams::StreamReadReply> = ::redis::cmd("XREADGROUP")
+            .arg("GROUP")
+            .arg(&self.group)
+            .arg(&self.consumer)
+            .arg("COUNT")
+            .arg(count)
+            .arg("BLOCK")
+            .arg(block.as_millis() as usize)
+            .arg("STREAMS")
+            .arg(READY_STREAM)
+            .arg(">")
+            .query_async(&mut conn)
+            .await?;
+
+        Ok(result
+            .map(|reply| {
+                reply
+                    .keys
+                    .into_iter()
+                    .flat_map(|key| key.ids.into_iter().map(parse_stream_id))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Reclaim entries idle in the PEL longer than `min_idle`.
+    pub async fn reclaim_stale(
+        &self,
+        min_idle: Duration,
+        count: usize,
+    ) -> Result<Vec<StreamDelivery>, QueueError> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.client.get_multiplexed_async_connection().await?;
+        let reply: ::redis::streams::StreamAutoClaimReply = ::redis::cmd("XAUTOCLAIM")
+            .arg(READY_STREAM)
+            .arg(&self.group)
+            .arg(&self.consumer)
+            .arg(min_idle.as_millis() as usize)
+            .arg("0-0")
+            .arg("COUNT")
+            .arg(count)
+            .query_async(&mut conn)
+            .await?;
+        Ok(reply.claimed.into_iter().map(parse_stream_id).collect())
+    }
+
+    pub async fn schedule_retry(
+        &self,
+        envelope: &JobEnvelope,
+        delay: Duration,
+    ) -> Result<(), QueueError> {
+        let mut conn = self.client.get_multiplexed_async_connection().await?;
+        let payload = envelope
+            .to_delayed_payload()
+            .map_err(|e| QueueError::Other(e.to_string()))?;
+        let score = Utc::now().timestamp_millis() + delay.as_millis() as i64;
+        let _: i32 = ::redis::cmd("ZADD")
+            .arg(DELAYED_ZSET)
+            .arg(score)
+            .arg(payload)
+            .query_async(&mut conn)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn dead_letter_job(
+        &self,
+        job: &ExtractionJob,
+        reason: &str,
+    ) -> Result<(), QueueError> {
+        let mut conn = self.client.get_multiplexed_async_connection().await?;
+        xadd_dlq_raw(
+            &mut conn,
+            &job.stream_id,
+            &job.envelope().to_fields(),
+            reason,
+        )
+        .await
+    }
+
+    pub async fn dead_letter_malformed(
+        &self,
+        message: &MalformedMessage,
+    ) -> Result<(), QueueError> {
+        let mut conn = self.client.get_multiplexed_async_connection().await?;
+        xadd_dlq_raw(
+            &mut conn,
+            &message.stream_id,
+            &message.fields,
+            &message.reason,
+        )
+        .await
+    }
 }
 
 #[async_trait]
@@ -97,7 +227,7 @@ impl QueueConsumer for RedisConsumer {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
         if let Err(e) = ::redis::cmd("XGROUP")
             .arg("CREATE")
-            .arg("extractions:queue")
+            .arg(READY_STREAM)
             .arg(&self.group)
             .arg("0")
             .arg("MKSTREAM")
@@ -107,81 +237,100 @@ impl QueueConsumer for RedisConsumer {
             if !e.to_string().contains("BUSYGROUP") {
                 return Err(e.into());
             }
-            // BUSYGROUP = group already exists, fine
         }
         Ok(())
     }
 
     async fn next_job(&self) -> Result<Option<ExtractionJob>, QueueError> {
-        let mut conn = self.client.get_multiplexed_async_connection().await?;
-        let result: Option<::redis::streams::StreamReadReply> = ::redis::cmd("XREADGROUP")
-            .arg("GROUP")
-            .arg(&self.group)
-            .arg(&self.consumer)
-            .arg("COUNT")
-            .arg(1)
-            .arg("BLOCK")
-            .arg(5000)
-            .arg("STREAMS")
-            .arg("extractions:queue")
-            .arg(">")
-            .query_async(&mut conn)
-            .await?;
-
-        let entry = match result {
-            Some(reply) => reply.keys.first().and_then(|k| k.ids.first()).cloned(),
-            None => return Ok(None),
-        };
-
-        let entry = match entry {
-            Some(e) => e,
-            None => return Ok(None),
-        };
-
-        let stream_id = entry.id.clone();
-        let extraction_id: Option<Uuid> = entry
-            .get::<String>("extraction_id")
-            .and_then(|s| Uuid::parse_str(&s).ok());
-        let document_id: Option<Uuid> = entry
-            .get::<String>("document_id")
-            .and_then(|s| Uuid::parse_str(&s).ok());
-        let template_id: Option<Uuid> = entry
-            .get::<String>("template_id")
-            .and_then(|s| Uuid::parse_str(&s).ok());
-        let workspace_id: Option<WorkspaceId> = entry
-            .get::<String>("workspace_id")
-            .and_then(|s| Uuid::parse_str(&s).ok())
-            .and_then(|id| WorkspaceId::new(id).ok());
-        let batch_job_id: Option<Uuid> = entry
-            .get::<String>("batch_job_id")
-            .and_then(|s| Uuid::parse_str(&s).ok());
-
-        let job = extraction_id.and_then(|eid| {
-            document_id.and_then(|did| {
-                template_id.and_then(|tid| {
-                    workspace_id.map(|wid| ExtractionJob {
-                        stream_id,
-                        extraction_id: eid,
-                        document_id: did,
-                        template_id: tid,
-                        workspace_id: wid,
-                        batch_job_id,
-                    })
-                })
-            })
-        });
-
-        Ok(job)
+        let deliveries = self.read_new(1, Duration::from_secs(5)).await?;
+        match deliveries.into_iter().next() {
+            Some(StreamDelivery::Job(job)) => Ok(Some(job)),
+            Some(StreamDelivery::Malformed(message)) => {
+                self.dead_letter_malformed(&message).await?;
+                self.ack(&message.stream_id).await?;
+                Ok(None)
+            }
+            None => Ok(None),
+        }
     }
 
     async fn ack(&self, stream_id: &str) -> Result<(), QueueError> {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
         ::redis::cmd("XACK")
-            .arg("extractions:queue")
+            .arg(READY_STREAM)
             .arg(&self.group)
             .arg(stream_id)
             .query_async::<()>(&mut conn)
             .await?;
         Ok(())
     }
+}
+
+fn parse_stream_id(entry: ::redis::streams::StreamId) -> StreamDelivery {
+    let mut fields = HashMap::new();
+    let mut pairs = Vec::new();
+    for (key, value) in &entry.map {
+        if let Ok(text) = String::from_redis_value(value) {
+            fields.insert(key.clone(), text.clone());
+            pairs.push((key.clone(), text));
+        }
+    }
+    match JobEnvelope::from_fields(&fields) {
+        Ok(envelope) => match envelope.workspace() {
+            Ok(workspace_id) => StreamDelivery::Job(ExtractionJob {
+                stream_id: entry.id,
+                extraction_id: envelope.extraction_id,
+                document_id: envelope.document_id,
+                template_id: envelope.template_id,
+                workspace_id,
+                batch_job_id: envelope.batch_job_id,
+            }),
+            Err(err) => StreamDelivery::Malformed(MalformedMessage {
+                stream_id: entry.id,
+                reason: err.message().to_string(),
+                fields: pairs,
+            }),
+        },
+        Err(err) => StreamDelivery::Malformed(MalformedMessage {
+            stream_id: entry.id,
+            reason: err.message().to_string(),
+            fields: pairs,
+        }),
+    }
+}
+
+async fn xadd_envelope(
+    conn: &mut redis::aio::MultiplexedConnection,
+    stream: &str,
+    envelope: &JobEnvelope,
+) -> Result<(), QueueError> {
+    let mut cmd = ::redis::cmd("XADD");
+    cmd.arg(stream).arg("*");
+    for (key, value) in envelope.to_fields() {
+        cmd.arg(key).arg(value);
+    }
+    cmd.query_async::<String>(conn).await?;
+    Ok(())
+}
+
+async fn xadd_dlq_raw(
+    conn: &mut redis::aio::MultiplexedConnection,
+    original_id: &str,
+    fields: &[(String, String)],
+    reason: &str,
+) -> Result<(), QueueError> {
+    let mut cmd = ::redis::cmd("XADD");
+    cmd.arg(DLQ_STREAM)
+        .arg("*")
+        .arg("original_id")
+        .arg(original_id)
+        .arg("error")
+        .arg(reason)
+        .arg("dead_lettered_at")
+        .arg(Utc::now().to_rfc3339());
+    for (key, value) in fields {
+        cmd.arg(key).arg(value);
+    }
+    cmd.query_async::<String>(conn).await?;
+    Ok(())
 }

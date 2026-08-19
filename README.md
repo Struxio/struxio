@@ -155,7 +155,8 @@ All config is via environment variables. Copy `.env.example` to `.env`.
 | `GEMINI_MODEL` | ❌ | Gemini model (default: `gemini-2.5-flash`) |
 | `GEMINI_TIMEOUT_SECS` | ❌ | Gemini request timeout in seconds (default: `120`) |
 | `STRUXIO_API_KEY` | ✅ | Bearer token for self-hosted auth |
-| `SERVER_PORT` | ❌ | Port (default: 8080) |
+| `WORKER_CONCURRENCY` | ❌ | Concurrent stream jobs (default: `8`) |
+| `WORKER_MAX_ATTEMPTS` | ❌ | Attempts before DLQ (default: `5`) |
 
 ## Contributing
 
