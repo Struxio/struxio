@@ -24,3 +24,4 @@ anyhow = { workspace = true }
 sqlx = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 aws-credential-types = { workspace = true }
+async-trait = { workspace = true }
