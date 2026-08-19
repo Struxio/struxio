@@ -79,34 +79,11 @@ impl BatchJobRepo {
         pool: &PgPool,
         workspace_id: WorkspaceId,
         id: Uuid,
-        completed_documents: i32,
-        failed_documents: i32,
-        status: &str,
+        _completed_documents: i32,
+        _failed_documents: i32,
+        _status: &str,
     ) -> Result<BatchJob, sqlx::Error> {
-        let row = sqlx::query(&format!(
-            r#"UPDATE batch_jobs SET
-                completed_documents = $3,
-                failed_documents = $4,
-                status = CASE
-                    WHEN $3 + $4 >= total_documents THEN 'completed'
-                    ELSE $5
-                END,
-                completed_at = CASE
-                    WHEN $3 + $4 >= total_documents THEN now()
-                    ELSE completed_at
-                END
-             WHERE workspace_id = $1 AND id = $2
-             RETURNING {SELECT_COLS}"#,
-        ))
-        .bind(workspace_id.as_uuid())
-        .bind(id)
-        .bind(completed_documents)
-        .bind(failed_documents)
-        .bind(status)
-        .fetch_one(pool)
-        .await?;
-
-        row_to_batch(row)
+        Self::refresh_progress(pool, workspace_id, id).await
     }
 
     /// Recalculate counters and status from workspace-scoped extraction rows

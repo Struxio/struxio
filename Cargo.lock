@@ -3179,8 +3179,10 @@ name = "struxio-worker"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "aws-credential-types",
  "aws-sdk-s3",
+ "chrono",
  "dotenvy",
  "redis",
  "serde_json",
