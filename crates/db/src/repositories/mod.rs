@@ -1,6 +1,9 @@
 pub mod ai_models;
 pub mod batch_jobs;
+pub mod contracts;
 pub mod documents;
+pub mod evaluations;
+pub mod evidence;
 pub mod extractions;
 pub mod templates;
 pub mod workspaces;
