@@ -149,8 +149,13 @@ async fn published_contract_is_hash_addressed_and_round_trips() {
     let by_hash = ContractRepo::find_by_content_hash(&pool, workspace, contract.content_hash())
         .await
         .unwrap();
-    assert_eq!(by_hash.len(), 1);
-    assert_eq!(by_hash[0].id, stored.id);
+    assert!(
+        by_hash.iter().any(|row| row.id == stored.id),
+        "hash lookup must include the published version"
+    );
+    assert!(by_hash
+        .iter()
+        .all(|row| row.contract.content_hash() == contract.content_hash()));
 
     let fixtures = ContractRepo::list_fixtures(&pool, workspace, stored.id)
         .await
@@ -166,6 +171,41 @@ async fn published_contract_is_hash_addressed_and_round_trips() {
         .expected_data()
         .get("evidence")
         .is_none());
+}
+
+#[tokio::test]
+async fn identical_specs_reuse_hash_addressed_content_in_a_workspace() {
+    let pool = connect().await;
+    let workspace = WorkspaceId::local();
+    let unique = Uuid::new_v4().simple().to_string();
+    let first = sample_contract(&format!("alpha-{unique}"), 1, &format!("fix-{unique}"));
+    let second = sample_contract(&format!("beta-{unique}"), 1, &format!("fix-{unique}"));
+    assert_eq!(first.content_hash(), second.content_hash());
+
+    let stored_first = ContractRepo::publish(&pool, workspace, &first)
+        .await
+        .unwrap();
+    let stored_second = ContractRepo::publish(&pool, workspace, &second)
+        .await
+        .unwrap();
+    assert_ne!(stored_first.id, stored_second.id);
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM extraction_contract_contents \
+         WHERE workspace_id = $1 AND content_hash = $2",
+    )
+    .bind(workspace.as_uuid())
+    .bind(first.content_hash().as_hex())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+
+    let labeled = ContractRepo::find_by_content_hash(&pool, workspace, first.content_hash())
+        .await
+        .unwrap();
+    assert!(labeled.iter().any(|row| row.id == stored_first.id));
+    assert!(labeled.iter().any(|row| row.id == stored_second.id));
 }
 
 #[tokio::test]
