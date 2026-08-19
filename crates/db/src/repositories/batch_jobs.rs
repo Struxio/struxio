@@ -108,4 +108,45 @@ impl BatchJobRepo {
 
         row_to_batch(row)
     }
+
+    /// Recalculate counters and status from workspace-scoped extraction rows
+    /// in one statement, so concurrent workers cannot regress a batch.
+    pub async fn refresh_progress(
+        pool: &PgPool,
+        workspace_id: WorkspaceId,
+        id: Uuid,
+    ) -> Result<BatchJob, sqlx::Error> {
+        let row = sqlx::query(&format!(
+            r#"UPDATE batch_jobs AS b
+               SET completed_documents = counts.completed,
+                   failed_documents = counts.failed,
+                   status = CASE
+                       WHEN counts.completed + counts.failed < b.total_documents
+                           THEN 'processing'
+                       WHEN counts.failed = 0 THEN 'completed'
+                       WHEN counts.completed = 0 THEN 'failed'
+                       ELSE 'partially_completed'
+                   END,
+                   completed_at = CASE
+                       WHEN counts.completed + counts.failed >= b.total_documents
+                           THEN COALESCE(b.completed_at, now())
+                       ELSE NULL
+                   END
+               FROM (
+                   SELECT
+                       COALESCE(COUNT(*) FILTER (WHERE status = 'completed'), 0)::int AS completed,
+                       COALESCE(COUNT(*) FILTER (WHERE status = 'failed'), 0)::int AS failed
+                   FROM extractions
+                   WHERE workspace_id = $1 AND batch_job_id = $2
+               ) AS counts
+               WHERE b.workspace_id = $1 AND b.id = $2
+               RETURNING {SELECT_COLS}"#,
+        ))
+        .bind(workspace_id.as_uuid())
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+
+        row_to_batch(row)
+    }
 }

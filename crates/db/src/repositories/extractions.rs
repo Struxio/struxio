@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{PgPool, Row};
 use struxio_common::models::Extraction;
@@ -7,6 +8,13 @@ use uuid::Uuid;
 use super::workspace_id_of;
 
 pub struct ExtractionRepo;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimResult {
+    Claimed,
+    AlreadyTerminal,
+    AlreadyProcessing,
+}
 
 fn row_to_extraction(r: sqlx::postgres::PgRow) -> Result<Extraction, sqlx::Error> {
     Ok(Extraction {
@@ -159,6 +167,83 @@ impl ExtractionRepo {
         row_to_extraction(row)
     }
 
+    /// Claim an extraction while preventing ordinary duplicate deliveries
+    /// from invoking the provider twice. A stale processing lease is
+    /// reclaimable after the queue visibility timeout.
+    pub async fn claim_for_processing(
+        pool: &PgPool,
+        workspace_id: WorkspaceId,
+        id: Uuid,
+        attempt: u32,
+        lease_cutoff: DateTime<Utc>,
+    ) -> Result<ClaimResult, sqlx::Error> {
+        let updated = sqlx::query(
+            "UPDATE extractions
+             SET status = 'processing',
+                 attempt_count = GREATEST(attempt_count, $3),
+                 last_attempt_at = now(),
+                 next_retry_at = NULL,
+                 last_error_class = NULL
+             WHERE workspace_id = $1 AND id = $2
+               AND (
+                   status = 'pending'
+                   OR (status = 'processing'
+                       AND (last_attempt_at IS NULL OR last_attempt_at < $4))
+               )
+             RETURNING id",
+        )
+        .bind(workspace_id.as_uuid())
+        .bind(id)
+        .bind(attempt as i32)
+        .bind(lease_cutoff)
+        .fetch_optional(pool)
+        .await?;
+
+        if updated.is_some() {
+            return Ok(ClaimResult::Claimed);
+        }
+
+        let status: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM extractions WHERE workspace_id = $1 AND id = $2",
+        )
+        .bind(workspace_id.as_uuid())
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(match status.as_deref() {
+            Some("completed") | Some("failed") | None => ClaimResult::AlreadyTerminal,
+            Some(_) => ClaimResult::AlreadyProcessing,
+        })
+    }
+
+    /// Persist the retry decision before the stream entry is acknowledged.
+    pub async fn mark_retry(
+        pool: &PgPool,
+        workspace_id: WorkspaceId,
+        id: Uuid,
+        error_class: &str,
+        error_message: &str,
+        next_retry_at: DateTime<Utc>,
+    ) -> Result<Extraction, sqlx::Error> {
+        let row = sqlx::query(&format!(
+            "UPDATE extractions SET status = 'pending', error_message = $3,
+                    last_error_class = $4, next_retry_at = $5
+             WHERE workspace_id = $1 AND id = $2
+               AND status NOT IN ('completed', 'failed')
+             RETURNING {SELECT_COLS}"
+        ))
+        .bind(workspace_id.as_uuid())
+        .bind(id)
+        .bind(error_message)
+        .bind(error_class)
+        .bind(next_retry_at)
+        .fetch_one(pool)
+        .await?;
+
+        row_to_extraction(row)
+    }
+
     pub async fn update_result(
         pool: &PgPool,
         workspace_id: WorkspaceId,
@@ -183,6 +268,41 @@ impl ExtractionRepo {
         .await?;
 
         row_to_extraction(row)
+    }
+
+    /// Complete exactly once so a redelivery cannot overwrite a durable
+    /// result after the provider call has already succeeded.
+    pub async fn complete_idempotent(
+        pool: &PgPool,
+        workspace_id: WorkspaceId,
+        id: Uuid,
+        result: &Value,
+        input_tokens: i32,
+        output_tokens: i32,
+        processing_time_ms: Option<i32>,
+    ) -> Result<Extraction, sqlx::Error> {
+        let row = sqlx::query(&format!(
+            "UPDATE extractions SET result = $3, input_tokens = $4, output_tokens = $5,
+                    processing_time_ms = $6, status = 'completed', completed_at = now(),
+                    next_retry_at = NULL
+             WHERE workspace_id = $1 AND id = $2 AND status <> 'completed'
+             RETURNING {SELECT_COLS}"
+        ))
+        .bind(workspace_id.as_uuid())
+        .bind(id)
+        .bind(result)
+        .bind(input_tokens)
+        .bind(output_tokens)
+        .bind(processing_time_ms)
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some(row) => row_to_extraction(row),
+            None => Self::find_by_id(pool, workspace_id, id)
+                .await?
+                .ok_or(sqlx::Error::RowNotFound),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -234,5 +354,35 @@ impl ExtractionRepo {
         .await?;
 
         row_to_extraction(row)
+    }
+
+    /// Persist a terminal failure idempotently; completed results always win.
+    pub async fn fail_idempotent(
+        pool: &PgPool,
+        workspace_id: WorkspaceId,
+        id: Uuid,
+        error_message: &str,
+        error_class: &str,
+    ) -> Result<Extraction, sqlx::Error> {
+        let row = sqlx::query(&format!(
+            "UPDATE extractions SET status = 'failed', error_message = $3,
+                    last_error_class = $4, next_retry_at = NULL, completed_at = now()
+             WHERE workspace_id = $1 AND id = $2
+               AND status NOT IN ('completed', 'failed')
+             RETURNING {SELECT_COLS}"
+        ))
+        .bind(workspace_id.as_uuid())
+        .bind(id)
+        .bind(error_message)
+        .bind(error_class)
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some(row) => row_to_extraction(row),
+            None => Self::find_by_id(pool, workspace_id, id)
+                .await?
+                .ok_or(sqlx::Error::RowNotFound),
+        }
     }
 }
