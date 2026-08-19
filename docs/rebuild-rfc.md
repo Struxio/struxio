@@ -2,25 +2,29 @@
 
 **Status:** proposed  
 **Audience:** maintainers deciding how to turn this engine into a product people pay for  
-**Companion research:** four parallel reviews of the current code, MCP 2026, OSS+cloud comps, and the extract market (Reducto, Extend, LlamaExtract, Kreuzberg, Docling, cloud IDPs)
+**Companion research:** four parallel reviews of the current code, MCP 2026, OSS+cloud comps, and the extract market; plus a feature/library map of Reducto in [rebuild-reducto-map.md](./rebuild-reducto-map.md).
 
-This is the plan for the rebuild. It is not a rewrite of Gemini extraction from scratch. The extractor already works. The product around it does not.
+This is the plan for the rebuild. Gemini-on-bytes already works as a shortcut. The product we are building is the **open-source Reducto**: parse → IR → extract/split/classify, with MCP and Studio, hosted or self-hosted.
 
 ---
 
 ## 1. Verdict
 
-The thesis is right.
+The thesis is right, and it is bigger than a hosted MCP wrapper.
 
-The person who deploys this on a VM, sets `STRUXIO_API_KEY`, and calls the REST API will not pay. That is fine. Open source is for them: a fence, a trust signal, and a distribution channel. AGPL is the lawyer that stops someone else from hosting our engine as a competing cloud without sharing changes. It is not a conversion funnel.
+**Struxio is the open-source Reducto**, the way Langfuse is the open-source LangSmith. Same platform category (parse, extract, split, classify, citations, Studio, MCP). Full product in OSS. Cloud is the same software with zero ops and a credit card. Cheaper, because we orchestrate open-source layout/OCR/VLMs instead of amortizing a custom model lab.
 
-The person who pays is the product builder sitting in Cursor, Claude Code, or Codex. He wants structured data out of a folder of invoices. He does not want Postgres, Redis, MinIO, Gemini keys, or a three-step presigned S3 upload. He will pay extra to skip that work.
+The person who deploys this on a VM will not pay. That is fine — and now even more important: OSS must be a **complete document platform**, not a teaser. If parse and Studio are cloud-only, the Langfuse sentence is a lie. AGPL is the lawyer that stops someone else from hosting our engine as a competing cloud. It is not a conversion funnel.
+
+The person who pays is the product builder sitting in Cursor, Claude Code, or Codex. He wants Reducto’s outcome (JSON, citations, folders of invoices) without Reducto’s price or a 12-model zoo on his laptop. He will pay extra to skip Docling + PaddleOCR + Redis + GPUs.
 
 Enterprise (SSO, VPC, DPA, SLA) is a later check. Do not build it first. Do not paint the schema into a corner that makes it impossible.
 
-**The main product is not the REST API.** The main product is an MCP server that extracts file data — one file or a batch — for any agent that speaks MCP. REST stays as the power-user / CI / self-host interface. The web app (`struxio-web`) is the cash register, the template studio, and the “Add to Cursor” button. It is not the thing agents use.
+**Interfaces:** MCP is how agents enter. REST is how pipelines and CI enter. Studio is how humans trust the output (bbox overlay). All three sit on one parse IR.
 
-The website already markets a one-shot extract (`documentUrl` + schema → JSON). The code does not expose that shape. Close that gap and the rebuild has a spine.
+The website already markets a one-shot extract (`documentUrl` + schema → JSON). That stays as the happy path. Underneath, the rebuild adds parse-then-extract so citations are real and large files do not go to Gemini as base64.
+
+Feature and library map: [rebuild-reducto-map.md](./rebuild-reducto-map.md).
 
 ---
 
@@ -28,13 +32,13 @@ The website already markets a one-shot extract (`documentUrl` + schema → JSON)
 
 | Persona | What they do | Will they pay? | What we give them |
 |---|---|---|---|
-| **Nerd / self-hoster** | Docker Compose on a VM, BYO Gemini key, curl / scripts | No | Complete AGPL engine + local MCP. Full extractor. No dark patterns. |
+| **Nerd / self-hoster** | Docker Compose on a VM, BYO LLM, curl / MCP | No | Complete AGPL platform: parse, extract, citations, MCP, Studio. No dark patterns. |
 | **Builder (primary buyer)** | Uses Cursor / Codex / Claude Code. Building a product. Hates extra ops. | Yes, gladly, for simplicity | Hosted MCP URL + credits. Sign in, click Add to Cursor, extract. |
 | **Enterprise** | Security, procurement, volume | Yes, later, big check | Same cloud, plus SSO / VPC / DPA / SLA. Packaging, not a third engine. |
 
-Do not design pricing, UX, or the first roadmap around the nerd. Do not feature-gate extraction quality to “upsell” him. He will fork Gemini himself. GitLab-style open-core (paywall the graphs) is the wrong model for this category.
+Do not design pricing, UX, or the first roadmap around the nerd. Do not feature-gate parse or Studio to “upsell” him — that would not be Langfuse. GitLab-style open-core (paywall the graphs) is the wrong model.
 
-Closest analogs: Plausible (AGPL CE + hosted convenience is the business) mixed with LlamaParse / Reducto (hosted MCP + free pages is how agents convert).
+Closest analog: **Langfuse vs LangSmith** — same product, open and cheaper, self-host first-class, cloud for people who will not operate it. Plausible for the AGPL fence. Reducto for the feature list we implement with OSS libraries.
 
 ---
 
@@ -77,26 +81,28 @@ Worker is serial (`COUNT 1`), ACKs failures with no retry, never marks a batch `
 
 ---
 
-## 4. Competitive position (do not fight the wrong war)
+## 4. Competitive position (be the open Reducto)
+
+Reducto is the **reference platform**, not a rival we politely avoid. We implement their verbs and IR with open libraries; we do not train their 12-model zoo. Accuracy will lag on handwriting and nightmare tables until the review pass is good. That is the Langfuse bargain: same job, honest, cheaper, you can run it.
 
 | Player | What they are | Implication |
 |---|---|---|
-| **Reducto, Extend, LlamaExtract, Landing ADE** | Closed agentic IDP: parse, extract, citations, Studio, evals, MCP | They win bake-offs on hard docs. Do not try to out-parse them in year one. |
-| **Textract / Document AI / Azure DI** | Cloud-console IDP, training or shallow query fields | Different buyer. Our wedge is nested JSON Schema inside an agent loop. |
-| **MinerU, Docling, Marker** | OSS parsers → markdown / layout trees | Complement later as a parse layer. They win RAG; we win typed extract. |
-| **Kreuzberg** | Apache, Rust, MCP, `extract_structured`, 100 formats | Real OSS threat. They are a **library**. We must be a **product**: hosted MCP, templates, batch, Cursor packaging, credits. |
+| **Reducto** | Closed agentic document platform; parse/extract/split/classify/edit; Studio; MCP; ~$0.03/page extract | **Product spec.** Copy verbs, IR, citations, MCP, Studio. Beat them on price, openness, and friction. |
+| **Extend, LlamaExtract, Landing ADE** | Same closed category | Same story. We are the OSS alternative to the whole class. |
+| **Textract / Document AI / Azure DI** | Cloud-console IDP | Different buyer. Nested JSON Schema + agents. |
+| **Docling, MinerU, Marker/Surya, PaddleOCR** | OSS parse/OCR engines | **Backends we wrap**, not competitors. We own the IR, API, MCP, Studio, jobs. |
+| **Kreuzberg** | Apache Rust library + MCP | Library threat. We are the product (hosted, templates, pipelines, credits). Can also be a `ParseBackend`. |
 
-**Where a small AGPL + cloud player wins in 2026:** the agent-runtime slot. “Drop files into Cursor, get JSON.” Not the AP-automation RFP.
+Gemini Flash on a typical invoice is roughly **$0.001–0.01/page**. Reducto extract is ~$0.03/page plus parse. Parse-once + Flash-on-markdown + OCR only when needed is how we stay cheaper without lying about quality.
 
-Gemini Flash on a typical invoice is roughly **$0.001–0.01/page**. Reducto extract is ~$0.03/page plus parse; Extend ~$0.06/page. A thin hosted wrapper at Gemini cost + markup is a 5–30× price story for the 80% of docs Gemini already handles (invoices, receipts, simple forms). The businessman is not shopping $0.001. He is shopping time-to-working-agent.
-
-**Anti-promise:** we will not out-parse Reducto this year. Citations before bounding boxes. Schema-in-request before a Studio. MCP before evals. Wrap a parser before building OCR.
+**Promise:** the Reducto-shaped platform, open and cheaper.  
+**Anti-promise:** we will not claim SOTA vs Reducto until we publish a bake-off (RD-TableBench is public). We will not paywall parse or Studio.
 
 ---
 
 ## 5. Product architecture
 
-Three planes. Only the control plane is what we sell this month.
+Four planes. We sell hosted ops. The document platform itself is OSS (Langfuse rule).
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -105,38 +111,38 @@ Three planes. Only the control plane is what we sell this month.
 └────────────────────────────┬────────────────────────────────────┘
                              │ Streamable HTTP MCP  or  REST
 ┌────────────────────────────▼────────────────────────────────────┐
-│  CONTROL PLANE  — proprietary (struxio-cloud + struxio-web)     │
-│  Login, workspaces, API keys, Stripe credits, hosted models,    │
-│  hosted MCP (OAuth + bearer), “Add to Cursor”, job history      │
+│  STUDIO  — OSS UI (bbox overlay, parse viewer, extract, keys)   │
+│  Cloud chrome: login, Stripe, Add to Cursor                     │
 └────────────────────────────┬────────────────────────────────────┘
-                             │ workspace_id + auth context
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│  CONTROL PLANE  — proprietary (struxio-cloud)                   │
+│  Workspaces, hashed keys, Stripe, hosted VLMs, OAuth MCP        │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ workspace_id
 ┌────────────────────────────▼────────────────────────────────────┐
 │  ENGINE  — AGPL (this repo)                                     │
-│  ingest · templates · extract · batch · worker · storage        │
-│  REST /v1  ·  stdio MCP (self-host / lite)                      │
+│  ingest → parse (IR) → review → extract / split / classify      │
+│  REST /v1  ·  MCP  ·  CLI  ·  worker  ·  parse sidecar          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+Parse-then-extract is the spine. Current Gemini-on-bytes remains `parser = "vlm_direct"` for tiny files. Default path: Docling (or digital pdfium) → Struxio IR (chunks/blocks/bboxes) → schema extract with citations. Details and library map: [rebuild-reducto-map.md](./rebuild-reducto-map.md).
+
 ### What “Struxio Web” is
 
-The rebuild should include a web app (`struxio-web`). It is not a document OS and not a human-in-the-loop review product (that is Extend’s $500/mo motion).
+Two layers, like Langfuse’s UI vs their cloud login:
 
-**Must exist to take money:**
+1. **OSS Studio** — upload, parse viewer, bbox overlay on the page, extract playground, job history. This is how you prove we are a Reducto alternative, not a wrapper.
+2. **Cloud chrome** — GitHub/Google login, Stripe, Add to Cursor, usage. Proprietary is fine.
 
-- GitHub / Google login
-- One workspace per user
-- API key create / revoke
-- **Add to Cursor** (and copy-paste for Codex / Claude Code)
-- Credit balance + Stripe
-- One “try it” upload that hits the same one-shot extract the MCP uses
+Week-1 cloud can ship the cash-register page first (remaining pages + Add to Cursor + one sample). Studio overlay is P2, but it is **in OSS**, not an EE teaser.
 
-**Soon after first dollar:** template studio (schema + prompt + live sample), job history, usage chart.
-
-Marketing can live in the same Next.js app. Homepage should sell the Cursor path. Self-host is a footer link to GitHub. Kill fake SDK claims until SDKs exist.
+Marketing site: sell “open-source Reducto” + Cursor path. Self-host is not a footer apology; it is the Langfuse half of the story.
 
 ### What the OSS engine must stay
 
-A **complete extractor**. If self-host cannot extract an invoice, GitHub is a lie. OSS does not need Clerk, Stripe, or a pretty UI. It does need MCP (stdio + optional local HTTP) so the nerd’s agent works without our cloud.
+A **complete document platform**: parse, extract with citations, split, classify, MCP, CLI. If self-host cannot parse an invoice to blocks and extract a schema, GitHub is a lie. OSS does not need Clerk or Stripe. It does need the parse sidecar (or `vlm_direct` fallback) and Studio.
 
 Cloud talks to the engine as a **library** (`oss_router()` + `AppState` already exist), not as a rewrite, and not as “one shared database with a static key in front.”
 
@@ -158,27 +164,31 @@ Agents will not do: MD5 → presigned PUT → confirm → create template UUID �
 
 Optional **cloud stdio bridge** (`npx @struxio/mcp`): reads the laptop disk, uploads, calls hosted extract. That is how “this folder of invoices” works without the user running our stack. `mcp.json` contains no secrets (device-code / OAuth login).
 
-Copy Linear / LlamaParse for connect UX (one URL, Connect, done). Copy Reducto for `next_steps` on every tool result, schema-as-object-or-string (clients mangle nested JSON), and truncation + `get_job`. Copy Kreuzberg for `glob` batch. Do **not** copy Reducto’s API-key-first hosted MCP, Unstructured’s workflow-CRUD tools, or our own three-step S3.
+Copy Linear / LlamaParse for connect UX (one URL, Connect, done). Copy Reducto for `next_steps`, schema-as-object-or-string, truncation + `get_job`, parse/extract/split/classify verbs, and local stdio that can read disk. Copy Kreuzberg for `glob` batch. Do **not** copy Reducto’s required `upload_file` hop, API-key-first hosted MCP, Unstructured’s workflow-CRUD tools, or our own three-step S3.
 
-### Tool surface (keep it small)
+### Tool surface
 
-Fat tool lists make agents waffle. v1:
+Match Reducto’s verbs. Keep upload implicit.
 
 | Tool | Job |
 |---|---|
-| `extract` | One file + `template_id` **or** inline `schema` → JSON |
-| `extract_batch` | Glob / paths / urls / document ids, **one** call, not a loop of `extract` |
-| `suggest_schema` | NL description (+ optional sample file) → JSON Schema + prompt |
-| `list_templates` / `get_template` | System + user templates (`invoice`, `receipt` already seeded) |
-| `create_template` / `update_template` | Save a schema so the agent stops reinventing it |
-| `get_job` | Poll; page batch items. Also support MCP Tasks when the client advertises them |
+| `parse` | File → chunks/blocks/bboxes. Default for RAG / inspection |
+| `extract` | Schema or `template_id` → JSON (+ citations). Parses internally if no `job_id` |
+| `extract_batch` | Glob / paths / urls. One call, not a loop |
+| `split` | NL sections → page ranges / subdocs |
+| `classify` | NL taxonomy → label |
+| `suggest_schema` | Description or sample parse → JSON Schema |
+| `list_templates` / `get_template` / `create_template` / `update_template` | System + user (`invoice`, `receipt` already seeded) |
+| `get_job` | Poll; page large parse/extract results |
 | `get_account` | Cloud only: credits remaining, top-up URL |
 
-**Never MCP-expose:** `documents/check`, `confirm`, `upload_url`, `s3_key`, `md5_hash`, Redis IDs, parse-as-required-prelude, classify/split/edit.
+v1 can ship `parse` + `extract` + `extract_batch` + templates + `get_job`. Split/classify follow once IR exists. Edit stays off MCP until an edit engine exists.
+
+**Never MCP-expose:** `documents/check`, `confirm`, `upload_url`, `s3_key`, `md5_hash`, Redis IDs. Parse is not a required *user-facing* hop — `extract` may parse internally — but `parse` is a first-class tool, not a hidden implementation detail.
 
 System instructions for the server should be short:
 
-> Extract structured JSON from PDFs and images. Prefer a saved template. For one file call `extract`. For a folder call `extract_batch` once. Never ask the user for S3 URLs. If status is pending, call `get_job`.
+> Struxio parses documents into a layout tree, then extracts JSON. For RAG or inspection call `parse`. For fields call `extract` (it will parse if needed). For a folder call `extract_batch` once. Prefer a saved template. Never ask the user for S3 URLs. If status is pending, call `get_job`.
 
 ### File inputs (MCP has no binary file type)
 
@@ -230,7 +240,7 @@ MCP and cloud sit on top of a slightly different engine than we have now. This i
 - Queue producer/consumer traits (harden the Redis impl; do not build Kafka)
 - S3 presign for **large** files (not as the agent default)
 - Templates: schema + prompt + system seeds (Invoice, Receipt — add slugs)
-- Gemini `responseSchema` structured output
+- Gemini `responseSchema` structured output (extract stage; also `vlm_direct` fallback)
 - Sync path for small interactive extracts; batch + worker for volume
 - Static API key for self-host
 
@@ -240,38 +250,40 @@ MCP and cloud sit on top of a slightly different engine than we have now. This i
 - `oss_router` naming (just `router`)
 - Clerk / `_require_role` theater in OSS
 - Credits columns **as cloud-only concern** — either wire them honestly behind a workspace or move them out of the OSS schema. Do not leave `credits_charged = 0` forever
-- Homepage `confidenceScore` until we compute something real (page-level `sources` is the honest first quality signal)
+- Homepage `confidenceScore` until it comes from parse blocks (see IR in the Reducto map)
 
 ### Must land before a second paying tenant
 
 1. **`workspace_id`** on documents, templates, extractions, batch_jobs. Default nil UUID in OSS. Unique `(workspace_id, md5_hash)` instead of global unique hash. S3 keys prefixed `/{workspace_id}/`. `AuthUser` becomes `{ workspace_id }` (OSS fills default). Queue already has `org_id` — use it as workspace id. **Skipping this is the 6-month rewrite.**
-2. **`POST /v1/extract`** — one-shot: `file_base64` | `file_url` + `schema` or `template_id`. This is what the homepage already shows and what MCP wraps. Keep `/v1/extractions/inline` as an alias if needed.
-3. **MIME normalization** — store real MIME; accept `pdf` and `application/pdf`.
-4. **Page count** — stop writing `page_count = 1`. Metering depends on it.
-5. **Gemini production path** — size threshold, timeouts, retries, Files API or equivalent for large docs, model allowlist matching the seed.
-6. **Worker** — concurrency limit, retries / DLQ, PEL reclaim, stream trim, honest batch terminal states, set `model_id`.
-7. **Pagination** on every list. Failed sync extract must not look like HTTP success to naive clients (explicit envelope or non-200).
-8. **Confirm verifies the object.** Unique violations → 409. Transactional batch create.
-9. **Packaging** — Dockerfile (api / worker / mcp), Compose profiles that actually run the app, working MinIO healthcheck.
-10. **Tests + CI** — service, mime, queue contract, MCP JSON-RPC transcripts with fixture PDFs (no live Gemini required).
-11. **Observability** — request ids, Gemini latency/tokens, queue lag.
-12. **Security** — body size limits, CORS not `*` by default in cloud, one security mailbox.
+2. **`POST /v1/extract`** — one-shot: `file_base64` | `file_url` + `schema` or `template_id`. Homepage + MCP wrap this. Keep `/v1/extractions/inline` as an alias if needed.
+3. **Parse IR + `POST /v1/parse`** — chunks/blocks/normalized bboxes. `ParseBackend` trait; `digital_pdf` first, Docling sidecar next. Extract prefers `parse_job_id` and emits citations. See [rebuild-reducto-map.md](./rebuild-reducto-map.md).
+4. **MIME normalization** — store real MIME; accept `pdf` and `application/pdf`.
+5. **Page count** — stop writing `page_count = 1`. Metering depends on it.
+6. **Gemini / LLM production path** — timeouts, retries, model allowlist; extract from IR rather than whole-file base64 when parse exists.
+7. **Worker** — concurrency limit, retries / DLQ, PEL reclaim, stream trim, honest batch terminal states, set `model_id`.
+8. **Pagination** on every list. Failed sync extract must not look like HTTP success to naive clients (explicit envelope or non-200).
+9. **Confirm verifies the object.** Unique violations → 409. Transactional batch create.
+10. **Packaging** — Dockerfile (api / worker / mcp / parse sidecar), Compose profiles `core` + `parse`, working MinIO healthcheck.
+11. **Tests + CI** — service, mime, queue contract, parse IR fixtures, MCP JSON-RPC transcripts (no live Gemini required).
+12. **Observability** — request ids, parse/LLM latency, tokens, queue lag.
+13. **Security** — body size limits, CORS not `*` by default in cloud, one security mailbox.
 
 ### Suggested crate layout
 
 ```
 crates/
-  common/     models, config, errors (principal with workspace_id)
+  common/     models, config, errors, parse IR (Chunk, Block, BBox)
   db/         repositories
-  core/       extract (provider trait), ingest, templates, jobs, storage
-  api/        REST (secondary interface)
-  mcp/        NEW — primary agent interface; calls core, not HTTP-to-self
+  core/       ingest, parse (ParseBackend), review pass, extract, split, classify, jobs, storage
+  api/        REST: /v1/parse, /extract, /split, /classify, jobs
+  mcp/        MCP server; calls core
   worker/     job runner
+  parse-sidecar (optional image)  Docling + PaddleOCR
 ```
 
-`core` should grow a **provider trait** (`GeminiClient` behind it) so a second model is a weekend, not a rewrite. Do not multi-model as a quality strategy; do it as BYOK / outage insurance.
+`core` needs two provider traits: **LLM** (Gemini today) and **ParseBackend** (digital pdfium → Docling → Marker). Quality improves by swapping backends, not by changing the API.
 
-OSS **lite MCP**: in-process Gemini, templates on disk or sqlite, tokio semaphore for batch. No Compose required. That is the nerd’s “it just works” and a test harness for tools.
+OSS **lite**: in-process `vlm_direct` extract, no sidecar. OSS **full**: Compose `parse` profile. Cloud: always full.
 
 ---
 
@@ -281,9 +293,9 @@ Keep the split `CONTRIBUTING.md` already states. MCP is a **surface**, not a fou
 
 | Repo | Visibility | License | Contains |
 |---|---|---|---|
-| **`struxio`** (this) | Public | **AGPL-3.0-only** (fix the Apache file) | Engine, REST, worker, Compose, Docker, stdio MCP, `SKILL.md` |
+| **`struxio`** (this) | Public | **AGPL-3.0-only** (fix the Apache file) | Engine, parse sidecar, REST, worker, MCP, CLI, Compose, `SKILL.md` |
 | **`struxio-cloud`** | Private | Proprietary | Multi-tenant gateway, keys, Stripe, hosted `/mcp`, OAuth, model-key vault, rate limits |
-| **`struxio-web`** | Private app; marketing may be public | Proprietary | Signup, studio, keys, billing, Add to Cursor |
+| **`struxio-web`** | Public Studio; private billing chrome OK | AGPL or MIT for Studio | Parse viewer, bbox overlay, extract playground. Cloud repo adds login/Stripe |
 | **Cursor plugin / `@struxio/mcp` proxy** | Public | **Apache-2.0 or MIT** | Thin client that talks HTTP to OSS or cloud. Corporate legal will vendor this. |
 
 Do not put Stripe in the public repo. Do not put a private `ee/` folder in the public tree (leak + contributor confusion). Cloud path-depends on these crates (`oss_router` nested at `/v1`).
@@ -299,8 +311,8 @@ Do **not** move to FSL/BSL yet. “Open source” is the nerd funnel and the HN 
 | | OSS | Cloud | Enterprise (later) |
 |---|---|---|---|
 | Price | $0 | Usage + simple monthly | Quote |
-| Extractor | Complete | Same engine | Same engine |
-| Models | BYO Gemini | Hosted (this is the SKU) | Dedicated / custom |
+| Platform | Parse, extract, split, classify, Studio, MCP | Same engine, hosted workers | Same engine |
+| Models | BYO LLM + local Docling | Hosted parse + hosted VLMs (the SKU) | Dedicated / custom |
 | MCP | stdio / local HTTP | Hosted URL + OAuth | Private URL / VPC |
 | Auth | Static key | GitHub/Google + hashed keys | SSO / SAML |
 | Support | GitHub | Email | Slack + SLA |
@@ -334,20 +346,22 @@ Every MCP / HTTP error at the cap: `insufficient_credits`, remaining, `top_up_ur
 
 ## 10. Web structure
 
-`struxio-web` (Next.js is the default unless we already have a marketing stack to reuse):
+`struxio-web` (Next.js unless we already have a marketing stack):
 
 ```
-/                 marketing — Cursor path first, GitHub second
-/docs             honest API + MCP install; bury the S3 three-step
-/login            GitHub / Google
-/app              remaining pages, Add to Cursor, try-it upload
-/app/templates    studio
+/                 marketing — “open-source Reducto” + Add to Cursor
+/docs             parse / extract / MCP; bury the S3 three-step
+/login            GitHub / Google (cloud)
+/app              remaining pages, Add to Cursor, try-it
+/app/parse        Studio: document + bbox overlay (OSS)
+/app/extract      schema playground + citations
+/app/templates    templates
 /app/jobs         history
 /app/keys         API keys
-/app/billing      Stripe
+/app/billing      Stripe (cloud)
 ```
 
-The post-login page for week 1 is allowed to be ugly: remaining pages, Add to Cursor, one sample invoice. That *is* the dashboard v0.
+Week-1 cloud may be only `/app` cash-register. Parse overlay is P2 and still lands in the OSS Studio, not an EE screenshot.
 
 ---
 
@@ -363,6 +377,7 @@ Constraint: the engine already has cloud seams. Use them. Do not rewrite Gemini 
 - [ ] `POST /v1/extract` (file + schema or template)
 - [ ] Count pages; decide how credits are recorded
 - [ ] One security mailbox
+- [ ] Sketch parse IR types (`Chunk`, `Block`, `BBox`) even if `/v1/parse` is the next PR
 
 Do not start Stripe before `workspace_id` exists.
 
@@ -371,45 +386,50 @@ Do not start Stripe before `workspace_id` exists.
 - [ ] Deploy current API + worker with **our** Gemini key, Postgres, Redis, S3
 - [ ] `struxio-web`: GitHub OAuth → workspace → hashed API key → Stripe ($29 or page pack)
 - [ ] Meter remaining pages; 402 when empty
-- [ ] Hosted MCP with **two tools first**: `extract`, `list_templates`. Bearer key is enough for week 1; OAuth is week 2–4
+- [ ] Hosted MCP with **two tools first**: `extract`, `list_templates` (add `parse` in P2). Bearer key is enough for week 1; OAuth is week 2–4
 - [ ] Post-login: Add to Cursor + remaining pages
 
 **Skip in P1:** Clerk orgs, team invites, Kafka, custom models, hand-written SDKs, SSO, HITL, a new queue.
 
-### P2 — Agent path is obvious
+### P2 — Document platform (the Reducto shape)
 
-- [ ] Cursor deeplink + marketplace / directory listing
-- [ ] `SKILL.md` + public demo repo: folder of messy invoices, one-sentence README
-- [ ] `extract_batch` + `get_job` + `suggest_schema`
-- [ ] Flash as default hosted model (Pro blows COGS)
-- [ ] Dockerfile + Compose that run api + worker
-- [ ] Tests for extract + MCP transcripts
+- [ ] `POST /v1/parse` + `digital_pdf` backend (pdfium / text layer)
+- [ ] Docling parse sidecar; map to IR
+- [ ] Extract from `parse_job_id` with citations
+- [ ] MCP tools `parse` + `extract` + `extract_batch`
+- [ ] Cursor deeplink + `SKILL.md` + invoice-folder demo
+- [ ] Flash as default hosted model
+- [ ] Dockerfile + Compose `core` and `parse`
+- [ ] Tests for IR fixtures + MCP transcripts
 
-### P3 — Cloud that does not embarrass us
+### P3 — Parity loop
 
-- [ ] OAuth for MCP (Connect on first tool call)
-- [ ] stdio lite + cloud desktop bridge (`npx @struxio/mcp`)
-- [ ] Template studio + job list
-- [ ] Provider trait; OpenAPI generated from Axum (SDKs generated later)
-- [ ] Rate limits in cloud middleware
+- [ ] OAuth for MCP; desktop bridge (`npx @struxio/mcp`)
+- [ ] Split + classify
+- [ ] Agentic review pass on low-confidence blocks (BYO VLM)
+- [ ] OSS Studio bbox overlay
+- [ ] Template studio + webhooks
 - [ ] Worker reliability (retries, concurrency, honest batch status)
+- [ ] OpenAPI from Axum; CLI `struxio parse|extract`
 
 ### Explicitly later (when someone asks and will pay)
 
-SSO, audit export, VPC, DPA, SLA, commercial AGPL exception, human review, parse-then-extract (wrap Docling/Kreuzberg, do not build OCR), bounding boxes, evals UI, Kafka, fake confidence scores.
+Edit / redact / generate / translate, SSO, audit export, VPC, DPA, SLA, commercial AGPL exception, HITL queues, custom fine-tunes, Kafka, claiming SOTA vs Reducto without a published bake-off.
 
-**One-sentence definition of done for “rebuild v1”:** GitHub login → Add to Cursor → agent extracts a PDF against a schema → Stripe when free pages run out.
+**One-sentence definition of done for “rebuild v1”:** GitHub login → Add to Cursor → agent parses/extracts a PDF against a schema → Stripe when free pages run out.
+
+**Definition of done for “open-source Reducto”:** self-host Compose `parse` profile can parse to bboxes, extract with citations, and inspect the result in OSS Studio — no Struxio account.
 
 ---
 
 ## 12. What we will not do
 
-- Rewrite the extractor in Python/TS to “move faster.” The Rust core is the advantage (cost, deploy size). Add TypeScript only at the web and the MIT MCP proxy.
-- Feature-gate extraction, batch, or templates in OSS.
-- Make Studio / HITL / workflow builder the homepage.
-- Expose S3 internals to agents.
+- Rewrite the **control plane** in Python. Rust orchestrates; Docling/PaddleOCR stay sidecars.
+- Feature-gate parse, extract, citations, or Studio in OSS. That would not be Langfuse; it would be a demo.
+- Train a custom 12-model zoo before the IR and APIs exist.
+- Require agents to call check/confirm/upload before parse.
 - Optimize for enterprise procurement before a builder has paid $29.
-- Promise parse quality we do not have.
+- Claim we out-parse Reducto until we publish numbers.
 
 ---
 
@@ -421,21 +441,24 @@ SSO, audit export, VPC, DPA, SLA, commercial AGPL exception, human review, parse
 4. **Where templates live in OSS lite** — sqlite vs JSON file in `~/.struxio/`.
 5. **Commercial license text** — can wait until the first embedder asks.
 6. **EU MCP region** — wait for a customer.
+7. **Default parse backend** — Docling sidecar vs `digital_pdf` only until the sidecar ships. See the library map.
 
 ---
 
 ## 14. Why this is a rebuild, not a polish
 
-The current app is “almost good” as a **self-host API skeleton**. It is not good as a **product**.
+The current app is “almost good” as a **Gemini extract skeleton**. It is not a document platform.
 
-A polish would add docs and a Dockerfile and still lose to Reducto’s MCP and Kreuzberg’s library UX.
+A polish would add docs and a Dockerfile and still be a wrapper. Reducto (and Langfuse, from the other side) show the bar: parse tree, citations, split/classify, Studio, MCP, self-host or cloud.
 
-A rebuild keeps the Gemini extract core and changes the center of gravity:
+A rebuild keeps the Rust engine and Gemini extract, and changes the center of gravity:
 
-- **Interface:** MCP first, REST second
-- **Buyer:** zero-ops builder, not the VM nerd
-- **Packaging:** AGPL engine + hosted credits + `struxio-web` as cash register
+- **Category:** open-source Reducto (Langfuse-style), not “thin extract API”
+- **Spine:** parse IR → extract/split/classify (Gemini-on-bytes is a backend, not the product)
+- **Interface:** MCP + REST + OSS Studio
+- **Buyer:** zero-ops builder; nerd gets the full platform for $0
+- **Packaging:** AGPL engine + OSS Studio + hosted GPUs/credits
 - **Schema:** workspace isolation before the second customer
-- **Promise:** the homepage’s one-shot extract, actually implemented
+- **Cost:** parse once, OCR only when needed, Flash default
 
-That is the structure. Next implementation PR should start at P0 (`workspace_id` + `/v1/extract` + license honesty), not at a greenfield monorepo.
+Next implementation PR: P0 (`workspace_id` + `/v1/extract` + license honesty), then parse IR + `/v1/parse`, not a greenfield monorepo.

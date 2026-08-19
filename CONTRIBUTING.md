@@ -4,11 +4,12 @@ Thank you for your interest in contributing! Struxio is an open-core project —
 
 ## What Belongs Here
 
-This repo (`struxio`) is the **OSS engine**: REST API, worker, and MCP server. Contributions here should focus on:
+This repo (`struxio`) is the **OSS document platform**: parse, extract, split/classify, REST, worker, MCP, CLI, and the parse sidecar. Contributions here should focus on:
 
-- Document extraction logic and AI prompt improvements
-- New API endpoints or expressive query parameters
-- MCP tools that call `core` (extract, extract_batch, templates) — not S3 check/confirm
+- Parse IR, parser backends (Docling, digital PDF, later Marker/MinerU), and the review pass
+- Document extraction logic, citations, and AI prompt improvements
+- New API endpoints (`/v1/parse`, `/extract`, `/split`, `/classify`)
+- MCP tools that call `core` (parse, extract, extract_batch, split, classify, templates) — not S3 check/confirm
 - Database schema improvements and migrations
 - Performance improvements (batching, async processing)
 - Developer experience (better error messages, docs, tests)
@@ -18,9 +19,9 @@ This repo (`struxio`) is the **OSS engine**: REST API, worker, and MCP server. C
 - Authentication providers (Clerk, Auth0, etc.) → `struxio-cloud`
 - Payment/billing flows (Stripe, etc.) → `struxio-cloud`
 - Hosted MCP OAuth, multi-tenant metering, and the public MCP URL → `struxio-cloud`
-- Frontend/dashboard UI → `struxio-web`
+- Cloud login / Stripe chrome → `struxio-web` (OSS Studio bbox viewer can live with the engine or in `struxio-web` as a public app)
 
-Product direction (MCP-first, hosted cloud for zero-ops buyers, OSS for self-hosters) is documented in [docs/rebuild-rfc.md](./docs/rebuild-rfc.md).
+Product direction (open-source Reducto / Langfuse-style): [docs/rebuild-rfc.md](./docs/rebuild-rfc.md) and [docs/rebuild-reducto-map.md](./docs/rebuild-reducto-map.md).
 
 ## Getting Started
 
@@ -53,11 +54,13 @@ cargo test       # run the test suite
 ```
 crates/
 ├── api/       — Axum HTTP server, routes, middleware (power-user REST)
-├── core/      — Business logic and service layer
+├── core/      — Business logic (parse, extract, jobs)
 ├── db/        — SQLx repositories (no business logic)
-├── common/    — Shared types (models, config, errors)
-├── mcp/       — planned: MCP server (primary agent interface)
+├── common/    — Shared types (models, config, errors, parse IR)
+├── mcp/       — planned: MCP server (parse, extract, batch, …)
 └── worker/    — Background job processor
+
+deploy/        — planned: parse sidecar image (Docling + OCR)
 ```
 
 **Key principle:** Business logic lives in `core/`, never in `api/` or `db/`. Routes call services. Services call repositories.

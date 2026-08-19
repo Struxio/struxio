@@ -148,7 +148,7 @@ All config is via environment variables. Copy `.env.example` to `.env`.
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md). The planned rebuild (MCP-first interface, hosted cloud, `struxio-web`) is in [docs/rebuild-rfc.md](./docs/rebuild-rfc.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md). Rebuild direction (open-source Reducto, MCP + cloud): [docs/rebuild-rfc.md](./docs/rebuild-rfc.md), library map: [docs/rebuild-reducto-map.md](./docs/rebuild-reducto-map.md).
 
 ## License
 
