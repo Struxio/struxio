@@ -25,8 +25,8 @@ pub struct GeminiResponse {
 pub enum GeminiError {
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
-    #[error("API error: {0}")]
-    Api(String),
+    #[error("API error {status}: {body}")]
+    Api { status: u16, body: String },
     #[error("Parse error: {0}")]
     Parse(String),
 }
@@ -35,9 +35,30 @@ impl From<GeminiError> for ProviderError {
     fn from(error: GeminiError) -> Self {
         match error {
             GeminiError::Http(inner) if inner.is_timeout() => ProviderError::Timeout,
+            GeminiError::Http(inner) if inner.is_connect() => {
+                ProviderError::Transient(inner.to_string())
+            }
             GeminiError::Http(inner) => ProviderError::Backend(inner.to_string()),
-            GeminiError::Api(message) => ProviderError::Backend(message),
+            GeminiError::Api { status, body }
+                if crate::jobs::retryable_http_status(status) =>
+            {
+                ProviderError::Transient(format!("Gemini API error {status}: {body}"))
+            }
+            GeminiError::Api { status, body } => {
+                ProviderError::Backend(format!("Gemini API error {status}: {body}"))
+            }
             GeminiError::Parse(message) => ProviderError::StructuredOutput(message),
+        }
+    }
+}
+
+impl GeminiError {
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Http(err) => err.is_timeout() || err.is_connect(),
+            Self::Api { status, .. } => crate::jobs::retryable_http_status(*status),
+            // Empty candidates / malformed model JSON are often transient.
+            Self::Parse(_) => true,
         }
     }
 }
@@ -185,12 +206,9 @@ impl GeminiClient {
         let resp = self.client.post(&url).json(&request).send().await?;
 
         if !resp.status().is_success() {
-            let status = resp.status();
+            let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(GeminiError::Api(format!(
-                "Gemini API returned {}: {}",
-                status, body
-            )));
+            return Err(GeminiError::Api { status, body });
         }
 
         let api_response: GeminiApiResponse = resp
@@ -309,5 +327,27 @@ mod tests {
             json["contents"][0]["parts"][0]["text"],
             "Extract the invoice number."
         );
+    }
+
+    #[test]
+    fn classifies_retryable_provider_failures() {
+        use super::GeminiError;
+
+        assert!(GeminiError::Api {
+            status: 429,
+            body: "rate limited".into(),
+        }
+        .is_retryable());
+        assert!(GeminiError::Api {
+            status: 503,
+            body: "unavailable".into(),
+        }
+        .is_retryable());
+        assert!(!GeminiError::Api {
+            status: 400,
+            body: "bad request".into(),
+        }
+        .is_retryable());
+        assert!(GeminiError::Parse("empty candidates".into()).is_retryable());
     }
 }

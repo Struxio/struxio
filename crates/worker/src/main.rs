@@ -4,19 +4,23 @@ use aws_sdk_s3::Client as S3Client;
 use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
+use struxio_common::config::Config;
 use struxio_common::mime::normalize_mime_type;
 use struxio_common::JobExecutionContext;
 use struxio_core::{
     gemini::GeminiClient,
-    provider::{ExtractionProvider, ExtractionRequest, SharedExtractionProvider},
+    jobs::{event_for_error, step, DeliveryAction, JobError, JobSnapshot, JobStatus, RetryPolicy},
+    provider::{ExtractionRequest, ProviderError, SharedExtractionProvider},
     queue::redis::RedisConsumer,
-    queue::{ExtractionJob, QueueConsumer},
+    queue::{ExtractionJob, QueueConsumer, StreamDelivery},
     storage::StorageClient,
 };
 use struxio_db::repositories::{
-    batch_jobs::BatchJobRepo, documents::DocumentRepo, extractions::ExtractionRepo,
+    documents::DocumentRepo,
+    extractions::{ClaimOutcome, ExtractionRepo},
     templates::TemplateRepo,
 };
+use tokio::sync::Semaphore;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -28,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let config = struxio_common::config::Config::from_env().expect("Failed to load configuration");
+    let config = Config::from_env().expect("Failed to load configuration");
 
     let pool = struxio_db::create_pool(&config.database_url).await?;
 
@@ -56,110 +60,319 @@ async fn main() -> anyhow::Result<()> {
     let provider: SharedExtractionProvider = Arc::new(gemini);
 
     let consumer_name = format!("worker-{}", uuid::Uuid::new_v4());
-    let consumer = RedisConsumer::new(redis, "workers".to_string(), consumer_name);
-
+    let consumer = RedisConsumer::for_workers(redis, consumer_name);
     consumer.ensure_group().await?;
-    tracing::info!("Worker started, waiting for jobs...");
 
+    let policy = RetryPolicy::new(
+        config.worker_max_attempts,
+        Duration::from_millis(config.worker_initial_backoff_ms),
+        Duration::from_millis(config.worker_max_backoff_ms),
+        struxio_core::jobs::retry::DEFAULT_JITTER_RATIO,
+    );
+    let runtime = Arc::new(WorkerRuntime {
+        pool,
+        storage,
+        provider,
+        consumer,
+        policy,
+        model_id: config.gemini_model.clone(),
+        concurrency: config.worker_concurrency,
+        claim_idle: config.worker_claim_idle(),
+    });
+
+    tracing::info!(
+        concurrency = runtime.concurrency,
+        max_attempts = runtime.policy.max_attempts,
+        "Worker started, waiting for jobs..."
+    );
+
+    let semaphore = Arc::new(Semaphore::new(runtime.concurrency));
     loop {
-        match consumer.next_job().await {
-            Ok(Some(job)) => {
-                tracing::info!(extraction_id = %job.extraction_id, workspace_id = %job.workspace_id, "Processing extraction");
-                match process_extraction(&job, &pool, &storage, provider.as_ref()).await {
-                    Ok(()) => {
-                        consumer.ack(&job.stream_id).await?;
-                        tracing::info!(extraction_id = %job.extraction_id, "Extraction completed");
-                    }
-                    Err(e) => {
-                        tracing::error!(extraction_id = %job.extraction_id, error = %e, "Extraction failed");
-                        ExtractionRepo::update_failed(
-                            &pool,
-                            job.workspace_id,
-                            job.extraction_id,
-                            &e.to_string(),
-                        )
-                        .await
-                        .ok();
-                        update_batch_progress_if_needed(&pool, &job).await;
-                        consumer.ack(&job.stream_id).await?;
-                    }
+        if let Err(e) = runtime.consumer.promote_delayed(runtime.concurrency).await {
+            tracing::error!(error = %e, "Failed to promote delayed retries");
+        }
+
+        match fill_inbox(&runtime).await {
+            Ok(inbox) if inbox.is_empty() => continue,
+            Ok(inbox) => {
+                for delivery in inbox {
+                    let permit = match semaphore.clone().acquire_owned().await {
+                        Ok(permit) => permit,
+                        Err(_) => break,
+                    };
+                    let runtime = Arc::clone(&runtime);
+                    tokio::spawn(async move {
+                        let _permit = permit;
+                        if let Err(e) = handle_delivery(&runtime, delivery).await {
+                            tracing::error!(error = %e, "Job handler failed before ACK");
+                        }
+                    });
                 }
             }
-            Ok(None) => continue,
             Err(e) => {
                 tracing::error!(error = %e, "Error reading from queue");
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     }
 }
 
+struct WorkerRuntime {
+    pool: PgPool,
+    storage: StorageClient,
+    provider: SharedExtractionProvider,
+    consumer: RedisConsumer,
+    policy: RetryPolicy,
+    model_id: String,
+    concurrency: usize,
+    claim_idle: Duration,
+}
+
+async fn fill_inbox(
+    runtime: &WorkerRuntime,
+) -> Result<Vec<StreamDelivery>, struxio_core::queue::QueueError> {
+    let mut inbox = runtime
+        .consumer
+        .reclaim_stale(runtime.claim_idle, runtime.concurrency)
+        .await?;
+    if inbox.len() < runtime.concurrency {
+        let more = runtime
+            .consumer
+            .read_new(runtime.concurrency - inbox.len(), Duration::from_secs(5))
+            .await?;
+        inbox.extend(more);
+    }
+    Ok(inbox)
+}
+
+async fn handle_delivery(runtime: &WorkerRuntime, delivery: StreamDelivery) -> anyhow::Result<()> {
+    match delivery {
+        StreamDelivery::Malformed(message) => {
+            tracing::error!(stream_id = %message.stream_id, reason = %message.reason, "Malformed job");
+            runtime.consumer.dead_letter_malformed(&message).await?;
+            runtime.consumer.ack(&message.stream_id).await?;
+            Ok(())
+        }
+        StreamDelivery::Job(job) => handle_job(runtime, job).await,
+    }
+}
+
+async fn handle_job(runtime: &WorkerRuntime, job: ExtractionJob) -> anyhow::Result<()> {
+    tracing::info!(
+        extraction_id = %job.extraction_id,
+        workspace_id = %job.workspace_id,
+        "Processing extraction"
+    );
+
+    match ExtractionRepo::claim_for_processing(&runtime.pool, job.workspace_id, job.extraction_id)
+        .await
+    {
+        Ok(ClaimOutcome::Missing) => {
+            runtime
+                .consumer
+                .dead_letter_job(&job, "extraction row not found")
+                .await?;
+            runtime.consumer.ack(&job.stream_id).await?;
+            return Ok(());
+        }
+        Ok(ClaimOutcome::SkipTerminal(existing)) => {
+            tracing::info!(
+                extraction_id = %job.extraction_id,
+                status = %existing.status,
+                "Skipping already-terminal extraction"
+            );
+            runtime.consumer.ack(&job.stream_id).await?;
+            return Ok(());
+        }
+        Ok(ClaimOutcome::Run(claimed)) => {
+            let snapshot = snapshot_of(&claimed);
+            if snapshot.attempt > runtime.policy.max_attempts {
+                finish_dead_letter(runtime, &job, snapshot, "attempts exhausted").await?;
+                return Ok(());
+            }
+            match process_extraction(&job, runtime).await {
+                Ok(success) => {
+                    ExtractionRepo::apply_completed(
+                        &runtime.pool,
+                        job.workspace_id,
+                        job.extraction_id,
+                        &success.result,
+                        success.input_tokens,
+                        success.output_tokens,
+                        success.processing_time_ms,
+                        &runtime.model_id,
+                    )
+                    .await?;
+                    runtime.consumer.ack(&job.stream_id).await?;
+                    tracing::info!(extraction_id = %job.extraction_id, "Extraction completed");
+                    Ok(())
+                }
+                Err(error) => {
+                    let decision = step(
+                        snapshot,
+                        event_for_error(&error),
+                        runtime.policy,
+                        rand_jitter(),
+                    );
+                    apply_failure_decision(runtime, &job, decision.action, error.message()).await
+                }
+            }
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+struct ExtractionSuccess {
+    result: serde_json::Value,
+    input_tokens: i32,
+    output_tokens: i32,
+    processing_time_ms: i32,
+}
+
 async fn process_extraction(
     job: &ExtractionJob,
-    pool: &PgPool,
-    storage: &StorageClient,
-    provider: &dyn ExtractionProvider,
-) -> anyhow::Result<()> {
+    runtime: &WorkerRuntime,
+) -> Result<ExtractionSuccess, JobError> {
     let ctx = JobExecutionContext::new(job.workspace_id);
     let workspace_id = ctx.workspace_id();
 
-    ExtractionRepo::update_status(pool, workspace_id, job.extraction_id, "processing").await?;
+    let doc = DocumentRepo::find_by_id(&runtime.pool, workspace_id, job.document_id)
+        .await
+        .map_err(|e| JobError::retryable(e.to_string()))?
+        .ok_or_else(|| JobError::permanent("Document not found"))?;
 
-    let doc = DocumentRepo::find_by_id(pool, workspace_id, job.document_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Document not found"))?;
+    let template = TemplateRepo::find_by_id(&runtime.pool, workspace_id, job.template_id)
+        .await
+        .map_err(|e| JobError::retryable(e.to_string()))?
+        .ok_or_else(|| JobError::permanent("Template not found"))?;
 
-    let template = TemplateRepo::find_by_id(pool, workspace_id, job.template_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Template not found"))?;
+    if doc.workspace_id != workspace_id || template.workspace_id != workspace_id {
+        return Err(JobError::permanent(
+            "job payload workspace does not match stored records",
+        ));
+    }
 
-    let file_bytes = storage.download(&doc.s3_key).await?;
+    let file_bytes = runtime
+        .storage
+        .download(&doc.s3_key)
+        .await
+        .map_err(|e| JobError::retryable(e.to_string()))?;
 
-    let mime_type = normalize_mime_type(&doc.file_type)?;
+    let mime_type =
+        normalize_mime_type(&doc.file_type).map_err(|e| JobError::permanent(e.to_string()))?;
 
     let start = std::time::Instant::now();
-    let response = provider
+    let response = runtime
+        .provider
         .extract(ExtractionRequest {
             bytes: &file_bytes,
             mime_type,
             instructions: &template.prompt_template,
             json_schema: &template.json_schema,
         })
-        .await?;
-    let processing_time = start.elapsed().as_millis() as i32;
+        .await
+        .map_err(provider_job_error)?;
 
-    ExtractionRepo::update_result(
-        pool,
-        workspace_id,
+    Ok(ExtractionSuccess {
+        result: response.result,
+        input_tokens: response.usage.input_tokens,
+        output_tokens: response.usage.output_tokens,
+        processing_time_ms: start.elapsed().as_millis() as i32,
+    })
+}
+
+fn provider_job_error(error: ProviderError) -> JobError {
+    match error {
+        ProviderError::Timeout
+        | ProviderError::Transient(_)
+        | ProviderError::StructuredOutput(_) => JobError::retryable(error.to_string()),
+        ProviderError::UnsupportedMediaType(_)
+        | ProviderError::Incompatible { .. }
+        | ProviderError::Backend(_) => JobError::permanent(error.to_string()),
+    }
+}
+
+async fn apply_failure_decision(
+    runtime: &WorkerRuntime,
+    job: &ExtractionJob,
+    action: DeliveryAction,
+    error_message: &str,
+) -> anyhow::Result<()> {
+    match action {
+        DeliveryAction::AckRetry { delay } => {
+            tracing::warn!(
+                extraction_id = %job.extraction_id,
+                delay_ms = delay.as_millis() as u64,
+                error = error_message,
+                "Retrying extraction"
+            );
+            ExtractionRepo::mark_retrying(
+                &runtime.pool,
+                job.workspace_id,
+                job.extraction_id,
+                error_message,
+            )
+            .await?;
+            runtime
+                .consumer
+                .schedule_retry(&job.envelope(), delay)
+                .await?;
+            runtime.consumer.ack(&job.stream_id).await?;
+            Ok(())
+        }
+        DeliveryAction::AckDeadLetter | DeliveryAction::AckMalformed => {
+            finish_dead_letter(
+                runtime,
+                job,
+                JobSnapshot {
+                    status: JobStatus::Failed,
+                    attempt: 0,
+                },
+                error_message,
+            )
+            .await
+        }
+        DeliveryAction::AckSkip => {
+            runtime.consumer.ack(&job.stream_id).await?;
+            Ok(())
+        }
+        DeliveryAction::AckComplete | DeliveryAction::Execute => {
+            anyhow::bail!("unexpected delivery action for a failed job: {action:?}")
+        }
+    }
+}
+
+async fn finish_dead_letter(
+    runtime: &WorkerRuntime,
+    job: &ExtractionJob,
+    _snapshot: JobSnapshot,
+    error_message: &str,
+) -> anyhow::Result<()> {
+    tracing::error!(
+        extraction_id = %job.extraction_id,
+        error = error_message,
+        "Extraction dead-lettered"
+    );
+    ExtractionRepo::apply_failed(
+        &runtime.pool,
+        job.workspace_id,
         job.extraction_id,
-        &response.result,
-        response.usage.input_tokens,
-        response.usage.output_tokens,
-        Some(processing_time),
+        error_message,
     )
     .await?;
-
-    update_batch_progress_if_needed(pool, job).await;
-
+    runtime.consumer.dead_letter_job(job, error_message).await?;
+    runtime.consumer.ack(&job.stream_id).await?;
     Ok(())
 }
 
-async fn update_batch_progress_if_needed(pool: &sqlx::PgPool, job: &ExtractionJob) {
-    let Some(batch_id) = job.batch_job_id else {
-        return;
-    };
-    let Ok((completed, failed)) =
-        ExtractionRepo::count_by_batch_status(pool, job.workspace_id, batch_id).await
-    else {
-        return;
-    };
-    let _ = BatchJobRepo::update_progress(
-        pool,
-        job.workspace_id,
-        batch_id,
-        completed,
-        failed,
-        "processing",
-    )
-    .await;
+fn snapshot_of(extraction: &struxio_common::models::Extraction) -> JobSnapshot {
+    JobSnapshot {
+        status: JobStatus::parse(&extraction.status).unwrap_or(JobStatus::Processing),
+        attempt: u32::try_from(extraction.attempt.max(0)).unwrap_or(u32::MAX),
+    }
+}
+
+fn rand_jitter() -> f64 {
+    use rand::Rng;
+    rand::thread_rng().gen::<f64>()
 }

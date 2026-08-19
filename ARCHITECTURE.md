@@ -289,21 +289,29 @@ sequenceDiagram
     API->>DB: BatchJobRepo::create(template_id, total_documents)
     loop for each document_id
         API->>DB: ExtractionRepo::create(doc_id, template_id, batch_job_id, status="pending")
-        API->>Q: XADD extractions:queue * extraction_id doc_id template_id batch_job_id
+        API->>Q: XADD extractions:queue * extraction_id doc_id template_id workspace_id batch_job_id
     end
     API-->>C: 200 BatchJob { status: "pending", total_documents: N }
 
-    Note over W,G: Worker processes concurrently
+    Note over W,G: Worker processes concurrently with bounded permits
     loop for each job in queue
-        W->>Q: XREADGROUP (blocking poll)
+        W->>Q: XAUTOCLAIM stale PEL + XREADGROUP COUNT N
         Q-->>W: ExtractionJob
+        W->>DB: claim_for_processing (attempt++, skip if terminal)
         W->>DB: DocumentRepo::find_by_id
         W->>DB: TemplateRepo::find_by_id
         W->>S3: download(s3_key)
         W->>G: GeminiClient::extract(...)
-        W->>DB: ExtractionRepo::update_completed / update_failed
-        W->>DB: BatchJobRepo::update_progress(completed, failed)
-        W->>Q: XACK extractions:queue workers <stream_id>
+        alt success
+            W->>DB: apply_completed + recompute batch counters in one txn
+            W->>Q: XACK
+        else retryable failure, attempts remaining
+            W->>DB: mark_retrying
+            W->>Q: ZADD extractions:delayed then XACK
+        else permanent or exhausted
+            W->>DB: apply_failed + recompute batch counters in one txn
+            W->>Q: XADD extractions:dlq then XACK
+        end
     end
 ```
 
@@ -328,14 +336,21 @@ curl http://localhost:8080/v1/batches/<batch-id>/extractions \
 
 ## Queue Architecture
 
-The extraction job queue is abstracted behind a trait pair in `struxio-core::queue`:
+The extraction job queue is abstracted behind a thin producer/consumer pair in `struxio-core::queue`. Delivery policy (retryability, backoff, batch terminal states) lives in `struxio-core::jobs` and is unit-tested without Redis or Postgres.
 
 ```rust
 trait QueueProducer { async fn enqueue_extraction(...) }
 trait QueueConsumer  { async fn next_job(...) → Option<ExtractionJob> }
 ```
 
-The concrete implementation (`RedisProducer` / `RedisConsumer`) lives in `queue::redis` and uses **Redis Streams** with consumer groups for reliable at-least-once delivery. Swapping to Kafka requires implementing the traits in `queue::kafka` and changing two type references in `AppState` and the worker — no service code changes.
+`RedisProducer` / `RedisConsumer` use Redis Streams with a consumer group. Guarantees:
+
+- **At-least-once delivery.** ACK happens only after a durable success, a durable retry (`retrying` + delayed ZSET), or a durable dead-letter (`failed` + `extractions:dlq`).
+- **Concurrent consumers.** `XREADGROUP COUNT N` plus a bounded semaphore; stale PEL entries are reclaimed with `XAUTOCLAIM`.
+- **Idempotent terminal state.** Completing or failing an already-terminal extraction is a no-op and does not bump batch counters.
+- **Honest batch status.** Counters are recomputed from child rows inside the same transaction as the terminal write: `completed`, `partially_completed`, or `failed` only when no child is pending, processing, or retrying.
+
+Workspace identity is a required stream field. Malformed or nil-workspace entries are dead-lettered and ACKed, never executed.
 
 ---
 

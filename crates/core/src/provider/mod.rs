@@ -57,6 +57,8 @@ pub enum ProviderError {
     StructuredOutput(String),
     #[error("extraction timed out")]
     Timeout,
+    #[error("transient backend failure: {0}")]
+    Transient(String),
     #[error("{0}")]
     Backend(String),
 }

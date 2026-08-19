@@ -1,7 +1,13 @@
 use std::env;
+use std::time::Duration;
 
 pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
 pub const DEFAULT_GEMINI_TIMEOUT_SECS: u64 = 120;
+pub const DEFAULT_WORKER_CONCURRENCY: usize = 8;
+pub const DEFAULT_WORKER_MAX_ATTEMPTS: u32 = 5;
+pub const DEFAULT_WORKER_INITIAL_BACKOFF_MS: u64 = 1_000;
+pub const DEFAULT_WORKER_MAX_BACKOFF_MS: u64 = 60_000;
+pub const DEFAULT_WORKER_CLAIM_IDLE_BUFFER_SECS: u64 = 30;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -19,6 +25,11 @@ pub struct Config {
     pub server_port: u16,
     pub log_level: String,
     pub cors_allowed_origins: Vec<String>,
+    pub worker_concurrency: usize,
+    pub worker_max_attempts: u32,
+    pub worker_initial_backoff_ms: u64,
+    pub worker_max_backoff_ms: u64,
+    pub worker_claim_idle_secs: u64,
 }
 
 impl Config {
@@ -50,20 +61,66 @@ impl Config {
                         .collect()
                 })
                 .unwrap_or_default(),
+            worker_concurrency: parse_positive_usize(
+                env::var("WORKER_CONCURRENCY").ok(),
+                DEFAULT_WORKER_CONCURRENCY,
+            ),
+            worker_max_attempts: parse_positive_u32(
+                env::var("WORKER_MAX_ATTEMPTS").ok(),
+                DEFAULT_WORKER_MAX_ATTEMPTS,
+            ),
+            worker_initial_backoff_ms: parse_positive_u64(
+                env::var("WORKER_INITIAL_BACKOFF_MS").ok(),
+                DEFAULT_WORKER_INITIAL_BACKOFF_MS,
+            ),
+            worker_max_backoff_ms: parse_positive_u64(
+                env::var("WORKER_MAX_BACKOFF_MS").ok(),
+                DEFAULT_WORKER_MAX_BACKOFF_MS,
+            ),
+            worker_claim_idle_secs: parse_positive_u64(
+                env::var("WORKER_CLAIM_IDLE_SECS").ok(),
+                parse_timeout_secs(env::var("GEMINI_TIMEOUT_SECS").ok())
+                    .saturating_add(DEFAULT_WORKER_CLAIM_IDLE_BUFFER_SECS),
+            ),
         })
+    }
+
+    pub fn worker_claim_idle(&self) -> Duration {
+        Duration::from_secs(self.worker_claim_idle_secs.max(1))
     }
 }
 
 fn parse_timeout_secs(value: Option<String>) -> u64 {
+    parse_positive_u64(value, DEFAULT_GEMINI_TIMEOUT_SECS)
+}
+
+fn parse_positive_usize(value: Option<String>, default: usize) -> usize {
     value
         .and_then(|value| value.parse().ok())
-        .filter(|seconds: &u64| *seconds > 0)
-        .unwrap_or(DEFAULT_GEMINI_TIMEOUT_SECS)
+        .filter(|n: &usize| *n > 0)
+        .unwrap_or(default)
+}
+
+fn parse_positive_u32(value: Option<String>, default: u32) -> u32 {
+    value
+        .and_then(|value| value.parse().ok())
+        .filter(|n: &u32| *n > 0)
+        .unwrap_or(default)
+}
+
+fn parse_positive_u64(value: Option<String>, default: u64) -> u64 {
+    value
+        .and_then(|value| value.parse().ok())
+        .filter(|n: &u64| *n > 0)
+        .unwrap_or(default)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_timeout_secs, DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_TIMEOUT_SECS};
+    use super::{
+        parse_positive_usize, parse_timeout_secs, DEFAULT_GEMINI_MODEL,
+        DEFAULT_GEMINI_TIMEOUT_SECS, DEFAULT_WORKER_CONCURRENCY,
+    };
 
     #[test]
     fn uses_flash_as_the_default_model() {
@@ -82,5 +139,17 @@ mod tests {
             DEFAULT_GEMINI_TIMEOUT_SECS
         );
         assert_eq!(parse_timeout_secs(Some("45".to_string())), 45);
+    }
+
+    #[test]
+    fn worker_concurrency_rejects_zero() {
+        assert_eq!(
+            parse_positive_usize(Some("0".to_string()), DEFAULT_WORKER_CONCURRENCY),
+            DEFAULT_WORKER_CONCURRENCY
+        );
+        assert_eq!(
+            parse_positive_usize(Some("16".to_string()), DEFAULT_WORKER_CONCURRENCY),
+            16
+        );
     }
 }

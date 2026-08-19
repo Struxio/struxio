@@ -1,4 +1,4 @@
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use struxio_common::models::BatchJob;
 use struxio_common::WorkspaceId;
 use uuid::Uuid;
@@ -75,37 +75,75 @@ impl BatchJobRepo {
         rows.into_iter().map(row_to_batch).collect()
     }
 
-    pub async fn update_progress(
+    pub async fn recompute_progress(
         pool: &PgPool,
         workspace_id: WorkspaceId,
         id: Uuid,
-        completed_documents: i32,
-        failed_documents: i32,
-        status: &str,
     ) -> Result<BatchJob, sqlx::Error> {
+        let mut tx = pool.begin().await?;
+        let batch = Self::recompute_in_tx(&mut tx, workspace_id, id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)?;
+        tx.commit().await?;
+        Ok(batch)
+    }
+
+    pub async fn mark_processing(
+        pool: &PgPool,
+        workspace_id: WorkspaceId,
+        id: Uuid,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE batch_jobs SET status = 'processing' \
+             WHERE workspace_id = $1 AND id = $2 AND status = 'pending'",
+        )
+        .bind(workspace_id.as_uuid())
+        .bind(id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn recompute_in_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        workspace_id: WorkspaceId,
+        id: Uuid,
+    ) -> Result<Option<BatchJob>, sqlx::Error> {
+        let locked =
+            sqlx::query("SELECT id FROM batch_jobs WHERE workspace_id = $1 AND id = $2 FOR UPDATE")
+                .bind(workspace_id.as_uuid())
+                .bind(id)
+                .fetch_optional(&mut **tx)
+                .await?;
+        if locked.is_none() {
+            return Ok(None);
+        }
+
+        let counts = super::extractions::child_counts_in_tx(tx, workspace_id, id).await?;
+        let status = counts.as_status_str();
+        let completed_at_now = counts.is_terminal();
+
         let row = sqlx::query(&format!(
             r#"UPDATE batch_jobs SET
                 completed_documents = $3,
                 failed_documents = $4,
-                status = CASE
-                    WHEN $3 + $4 >= total_documents THEN 'completed'
-                    ELSE $5
-                END,
+                status = $5,
                 completed_at = CASE
-                    WHEN $3 + $4 >= total_documents THEN now()
-                    ELSE completed_at
+                    WHEN $6 THEN COALESCE(completed_at, now())
+                    ELSE NULL
                 END
              WHERE workspace_id = $1 AND id = $2
              RETURNING {SELECT_COLS}"#,
         ))
         .bind(workspace_id.as_uuid())
         .bind(id)
-        .bind(completed_documents)
-        .bind(failed_documents)
+        .bind(counts.completed)
+        .bind(counts.failed)
         .bind(status)
-        .fetch_one(pool)
+        .bind(completed_at_now)
+        .fetch_one(&mut **tx)
         .await?;
 
-        row_to_batch(row)
+        row_to_batch(row).map(Some)
     }
 }
