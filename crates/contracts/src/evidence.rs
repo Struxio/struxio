@@ -132,6 +132,19 @@ impl EvidenceSidecar {
         }
     }
 
+    /// Rebuild a sidecar from append-only storage without inferring `status`.
+    pub fn from_stored(
+        version: u16,
+        status: EvidenceSidecarStatus,
+        entries: BTreeMap<JsonPointer, Vec<EvidenceEntry>>,
+    ) -> Self {
+        Self {
+            version,
+            status,
+            entries,
+        }
+    }
+
     pub fn with(mut self, pointer: JsonPointer, entry: EvidenceEntry) -> Self {
         self.entries.entry(pointer).or_default().push(entry);
         if self.status == EvidenceSidecarStatus::NotRequested {
@@ -396,6 +409,17 @@ mod tests {
         );
         let policy = EvidencePolicy::required(vec![pointer]);
         assert!(check_policy(&serde_json::json!({"total": 10}), &sidecar, &policy).is_satisfied());
+    }
+
+    #[test]
+    fn from_stored_preserves_unavailable_without_inferring_status() {
+        let stored = EvidenceSidecar::from_stored(
+            EVIDENCE_SIDECAR_VERSION,
+            EvidenceSidecarStatus::Unavailable,
+            BTreeMap::new(),
+        );
+        assert_eq!(stored.status(), EvidenceSidecarStatus::Unavailable);
+        assert!(stored.is_empty());
     }
 
     #[test]

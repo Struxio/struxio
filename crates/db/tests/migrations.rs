@@ -27,6 +27,15 @@ async fn tenant_tables_have_non_null_workspace_id() {
         "extraction_templates",
         "extractions",
         "batch_jobs",
+        "extraction_contract_contents",
+        "extraction_contract_versions",
+        "extraction_evidence_sidecars",
+        "extraction_evidence_entries",
+        "extraction_evidence_attachments",
+        "extraction_contract_fixtures",
+        "extraction_validation_reports",
+        "extraction_eval_runs",
+        "extraction_eval_run_results",
     ];
     for table in tables {
         let row: (String, String) = sqlx::query_as(
@@ -100,4 +109,48 @@ async fn document_hash_unique_is_workspace_local() {
         global.is_none(),
         "global md5 unique constraint must be dropped"
     );
+}
+
+#[tokio::test]
+async fn published_contract_content_is_hash_addressed() {
+    let pool = connect().await;
+    let check: Option<(String,)> = sqlx::query_as(
+        "SELECT conname FROM pg_constraint \
+         WHERE conname = 'extraction_contract_contents_hash_matches_payload'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert!(
+        check.is_some(),
+        "content hash must be constrained to payload digest"
+    );
+}
+
+#[tokio::test]
+async fn append_only_triggers_cover_contract_evidence_and_eval_tables() {
+    let pool = connect().await;
+    let tables = [
+        "extraction_contract_contents",
+        "extraction_contract_versions",
+        "extraction_evidence_sidecars",
+        "extraction_evidence_entries",
+        "extraction_evidence_attachments",
+        "extraction_contract_fixtures",
+        "extraction_validation_reports",
+        "extraction_eval_runs",
+        "extraction_eval_run_results",
+    ];
+    for table in tables {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM information_schema.triggers \
+             WHERE event_object_table = $1 AND trigger_name LIKE $2",
+        )
+        .bind(table)
+        .bind(format!("{table}_append_only%"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(count >= 1, "append-only trigger missing on {table}");
+    }
 }

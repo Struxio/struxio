@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::canonical::canonical_json;
 use crate::capabilities::{BackendCompatibility, BackendDescriptor};
 use crate::error::ContractError;
 use crate::evaluation::{EvalThresholds, FixtureDescriptor};
@@ -158,6 +159,20 @@ pub struct CandidateEvaluation {
 }
 
 impl CandidateEvaluation {
+    pub fn from_parts(
+        normalized: Value,
+        schema: SchemaValidationReport,
+        validation: ValidationReport,
+        evidence: EvidenceReport,
+    ) -> Self {
+        Self {
+            normalized,
+            schema,
+            validation,
+            evidence,
+        }
+    }
+
     pub fn is_valid(&self) -> bool {
         self.schema.is_valid() && self.validation.is_valid() && self.evidence.is_satisfied()
     }
@@ -204,6 +219,13 @@ impl ExtractionContract {
         self.identity.content_hash()
     }
 
+    /// Canonical bytes that the content hash addresses. Persistence must store
+    /// these bytes (not a JSONB rewrite) so published contracts stay immutable.
+    pub fn canonical_payload(&self) -> Vec<u8> {
+        canonical_json(&semantic_document(&self.spec))
+            .expect("contract domain values are serializable")
+    }
+
     pub fn verify_content_hash(&self) -> bool {
         self.content_hash() == hash_contract(&self.spec)
     }
@@ -236,12 +258,15 @@ impl ExtractionContract {
     }
 }
 
-fn hash_contract(spec: &ContractSpec) -> Sha256ContentHash {
-    let semantic = serde_json::json!({
+fn semantic_document(spec: &ContractSpec) -> Value {
+    serde_json::json!({
         "canonical_hash_version": CANONICAL_HASH_VERSION,
         "spec": spec,
-    });
-    semantic_sha256(&semantic)
+    })
+}
+
+fn hash_contract(spec: &ContractSpec) -> Sha256ContentHash {
+    semantic_sha256(&semantic_document(spec))
 }
 
 #[cfg(test)]
@@ -399,6 +424,15 @@ mod tests {
             ),
         );
         assert_ne!(base.content_hash(), instruction_changed.content_hash());
+    }
+
+    #[test]
+    fn canonical_payload_is_the_hash_preimage() {
+        let contract = sample_contract();
+        assert_eq!(
+            Sha256ContentHash::from_content(&contract.canonical_payload()),
+            contract.content_hash()
+        );
     }
 
     #[test]
