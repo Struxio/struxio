@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::{PgPool, Row};
 use struxio_common::WorkspaceId;
 use struxio_contracts::{
@@ -45,7 +46,7 @@ const SELECT_COLS: &str = "id, workspace_id, extraction_id, evaluation_run_resul
     contract_id, contract_content_sha256, report_json, report_sha256, created_at";
 
 fn row_to_report(row: sqlx::postgres::PgRow) -> Result<StoredValidationReport, sqlx::Error> {
-    let report_json = row.try_get("report_json")?;
+    let report_json: Value = row.try_get("report_json")?;
     let report: ValidationReportPayload = from_json("report_json", report_json.clone())?;
     let report_sha256 = hash_from_row(&row, "report_sha256")?;
     if hash_json(&report_json) != report_sha256 {

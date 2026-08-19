@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use serde_json::Value;
 use sqlx::{PgPool, Row};
 use struxio_common::WorkspaceId;
 use struxio_contracts::{EvidenceSidecar, Sha256ContentHash};
@@ -24,7 +25,7 @@ const SELECT_COLS: &str = "id, workspace_id, extraction_id, contract_id, \
     contract_content_sha256, sidecar_json, sidecar_sha256, created_at";
 
 fn row_to_sidecar(row: sqlx::postgres::PgRow) -> Result<StoredEvidenceSidecar, sqlx::Error> {
-    let sidecar_json = row.try_get("sidecar_json")?;
+    let sidecar_json: Value = row.try_get("sidecar_json")?;
     let sidecar: EvidenceSidecar = from_json("sidecar_json", sidecar_json.clone())?;
     let sidecar_sha256 = hash_from_row(&row, "sidecar_sha256")?;
     if hash_json(&sidecar_json) != sidecar_sha256 {
