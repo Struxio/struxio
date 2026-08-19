@@ -39,9 +39,7 @@ impl From<GeminiError> for ProviderError {
                 ProviderError::Transient(inner.to_string())
             }
             GeminiError::Http(inner) => ProviderError::Backend(inner.to_string()),
-            GeminiError::Api { status, body }
-                if crate::jobs::retryable_http_status(status) =>
-            {
+            GeminiError::Api { status, body } if crate::jobs::retryable_http_status(status) => {
                 ProviderError::Transient(format!("Gemini API error {status}: {body}"))
             }
             GeminiError::Api { status, body } => {
