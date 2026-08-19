@@ -152,16 +152,23 @@ impl<Q: QueueProducer> ExtractionService<Q> {
                 .map(|applied| applied.extraction)
                 .map_err(|e| AppError::Database(e.to_string()))
             }
-            Err(error) => ExtractionRepo::apply_failed_claimed(
-                &self.db,
-                ctx.workspace_id(),
-                extraction.id,
-                lease_token,
-                &error,
-            )
-            .await
-            .map(|applied| applied.extraction)
-            .map_err(|db_err| AppError::Database(db_err.to_string())),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    extraction_id = %extraction.id,
+                    "provider extract failed"
+                );
+                ExtractionRepo::apply_failed_claimed(
+                    &self.db,
+                    ctx.workspace_id(),
+                    extraction.id,
+                    lease_token,
+                    &error,
+                )
+                .await
+                .map(|applied| applied.extraction)
+                .map_err(|db_err| AppError::Database(db_err.to_string()))
+            }
         }
     }
 
@@ -261,7 +268,16 @@ impl<Q: QueueProducer> ExtractionService<Q> {
 
         loop {
             tokio::select! {
-                result = &mut work => return result.map_err(|error| error.to_string()),
+                result = &mut work => {
+                    return result.map_err(|error| {
+                        tracing::warn!(
+                            error = %error,
+                            extraction_id = %extraction_id,
+                            "provider extract failed"
+                        );
+                        error.client_message().to_string()
+                    });
+                }
                 _ = heartbeat.tick() => {
                     let renewed = tokio::time::timeout(
                         heartbeat_every,

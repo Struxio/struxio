@@ -63,6 +63,21 @@ pub enum ProviderError {
     Backend(String),
 }
 
+impl ProviderError {
+    /// Stable message safe to persist on an extraction row or return to a client.
+    /// `Display` keeps the detailed diagnostic for logs.
+    pub fn client_message(&self) -> &'static str {
+        match self {
+            Self::UnsupportedMediaType(_) => "unsupported media type",
+            Self::Incompatible { .. } => "incompatible extraction backend",
+            Self::StructuredOutput(_) => "invalid structured output",
+            Self::Timeout => "extraction timed out",
+            Self::Transient(_) => "transient backend failure",
+            Self::Backend(_) => "upstream provider error",
+        }
+    }
+}
+
 /// Object-safe extraction backend.
 ///
 /// The trait is intentionally free of generics so it can be stored as
@@ -232,6 +247,24 @@ mod tests {
 
         let json_only = BackendCompatibility::new().requiring(BackendCapability::StructuredJson);
         assert!(ensure_compatible(&provider, &json_only).is_ok());
+    }
+
+    #[test]
+    fn client_message_does_not_include_upstream_bodies() {
+        let err = ProviderError::Backend(
+            "Gemini API error 429: quota exceeded for project secret".into(),
+        );
+        assert_eq!(err.client_message(), "upstream provider error");
+        assert!(!err.client_message().contains("secret"));
+        assert!(err.to_string().contains("quota exceeded"));
+
+        let transient = ProviderError::Transient("connect error to 10.0.0.1".into());
+        assert_eq!(transient.client_message(), "transient backend failure");
+        assert!(!transient.client_message().contains("10.0.0.1"));
+
+        let parsed = ProviderError::StructuredOutput("raw model json {\"key\":\"leak\"}".into());
+        assert_eq!(parsed.client_message(), "invalid structured output");
+        assert!(!parsed.client_message().contains("leak"));
     }
 
     #[test]
