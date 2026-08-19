@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use struxio_common::WorkspaceId;
 use uuid::Uuid;
 
 use super::{ExtractionJob, QueueConsumer, QueueError, QueueProducer};
@@ -23,14 +24,14 @@ impl QueueProducer for RedisProducer {
         extraction_id: Uuid,
         document_id: Uuid,
         template_id: Uuid,
-        org_id: Uuid,
+        workspace_id: WorkspaceId,
         batch_job_id: Option<Uuid>,
     ) -> Result<(), QueueError> {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
         let eid = extraction_id.to_string();
         let did = document_id.to_string();
         let tid = template_id.to_string();
-        let oid = org_id.to_string();
+        let wid = workspace_id.as_uuid().to_string();
 
         match batch_job_id {
             Some(bid) => {
@@ -44,8 +45,8 @@ impl QueueProducer for RedisProducer {
                     .arg(&did)
                     .arg("template_id")
                     .arg(&tid)
-                    .arg("org_id")
-                    .arg(&oid)
+                    .arg("workspace_id")
+                    .arg(&wid)
                     .arg("batch_job_id")
                     .arg(&bid_s)
                     .query_async::<String>(&mut conn)
@@ -61,8 +62,8 @@ impl QueueProducer for RedisProducer {
                     .arg(&did)
                     .arg("template_id")
                     .arg(&tid)
-                    .arg("org_id")
-                    .arg(&oid)
+                    .arg("workspace_id")
+                    .arg(&wid)
                     .query_async::<String>(&mut conn)
                     .await?;
             }
@@ -151,9 +152,10 @@ impl QueueConsumer for RedisConsumer {
         let template_id: Option<Uuid> = entry
             .get::<String>("template_id")
             .and_then(|s| Uuid::parse_str(&s).ok());
-        let org_id: Option<Uuid> = entry
-            .get::<String>("org_id")
-            .and_then(|s| Uuid::parse_str(&s).ok());
+        let workspace_id: Option<WorkspaceId> = entry
+            .get::<String>("workspace_id")
+            .and_then(|s| Uuid::parse_str(&s).ok())
+            .and_then(|id| WorkspaceId::new(id).ok());
         let batch_job_id: Option<Uuid> = entry
             .get::<String>("batch_job_id")
             .and_then(|s| Uuid::parse_str(&s).ok());
@@ -161,12 +163,12 @@ impl QueueConsumer for RedisConsumer {
         let job = extraction_id.and_then(|eid| {
             document_id.and_then(|did| {
                 template_id.and_then(|tid| {
-                    org_id.map(|oid| ExtractionJob {
+                    workspace_id.map(|wid| ExtractionJob {
                         stream_id,
                         extraction_id: eid,
                         document_id: did,
                         template_id: tid,
-                        org_id: oid,
+                        workspace_id: wid,
                         batch_job_id,
                     })
                 })

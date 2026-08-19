@@ -1,7 +1,7 @@
 use struxio_common::models::{
     CheckDocumentRequest, CheckDocumentResponse, ConfirmUploadRequest, Document,
 };
-use struxio_common::{mime::normalize_mime_type, AppError};
+use struxio_common::{mime::normalize_mime_type, AppError, PrincipalContext};
 use struxio_db::repositories::documents::DocumentRepo;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -21,14 +21,16 @@ impl DocumentService {
 
     pub async fn check_document(
         &self,
+        ctx: &PrincipalContext,
         request: &CheckDocumentRequest,
     ) -> Result<CheckDocumentResponse, AppError> {
         let mime_type = normalize_mime_type(&request.file_type)
             .map_err(|e| AppError::Validation(e.to_string()))?;
 
-        if let Some(doc) = DocumentRepo::find_by_hash(&self.db, &request.md5_hash)
-            .await
-            .map_err(|e| AppError::Database(e.to_string()))?
+        if let Some(doc) =
+            DocumentRepo::find_by_hash(&self.db, ctx.workspace_id(), &request.md5_hash)
+                .await
+                .map_err(|e| AppError::Database(e.to_string()))?
         {
             return Ok(CheckDocumentResponse {
                 exists: true,
@@ -38,7 +40,12 @@ impl DocumentService {
             });
         }
 
-        let s3_key = format!("{}/{}", Uuid::new_v4(), request.file_name);
+        let s3_key = format!(
+            "{}/{}/{}",
+            ctx.workspace_id().as_uuid(),
+            Uuid::new_v4(),
+            request.file_name
+        );
         let upload_url = self
             .storage
             .generate_presigned_upload_url(&s3_key, mime_type, 3600)
@@ -55,6 +62,7 @@ impl DocumentService {
 
     pub async fn confirm_upload(
         &self,
+        ctx: &PrincipalContext,
         request: &ConfirmUploadRequest,
     ) -> Result<Document, AppError> {
         let mime_type = normalize_mime_type(&request.file_type)
@@ -62,6 +70,7 @@ impl DocumentService {
 
         DocumentRepo::create(
             &self.db,
+            ctx.workspace_id(),
             &request.md5_hash,
             &request.file_name,
             mime_type,
@@ -73,21 +82,25 @@ impl DocumentService {
         .map_err(|e| AppError::Database(e.to_string()))
     }
 
-    pub async fn list(&self) -> Result<Vec<Document>, AppError> {
-        DocumentRepo::list_all(&self.db)
+    pub async fn list(&self, ctx: &PrincipalContext) -> Result<Vec<Document>, AppError> {
+        DocumentRepo::list_all(&self.db, ctx.workspace_id())
             .await
             .map_err(|e| AppError::Database(e.to_string()))
     }
 
-    pub async fn get_by_id(&self, document_id: Uuid) -> Result<Document, AppError> {
-        DocumentRepo::find_by_id(&self.db, document_id)
+    pub async fn get_by_id(
+        &self,
+        ctx: &PrincipalContext,
+        document_id: Uuid,
+    ) -> Result<Document, AppError> {
+        DocumentRepo::find_by_id(&self.db, ctx.workspace_id(), document_id)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Document not found".to_string()))
     }
 
-    pub async fn delete(&self, document_id: Uuid) -> Result<(), AppError> {
-        let s3_key = DocumentRepo::delete_by_id(&self.db, document_id)
+    pub async fn delete(&self, ctx: &PrincipalContext, document_id: Uuid) -> Result<(), AppError> {
+        let s3_key = DocumentRepo::delete_by_id(&self.db, ctx.workspace_id(), document_id)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Document not found".to_string()))?;

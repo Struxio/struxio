@@ -1,6 +1,7 @@
 use aws_credential_types::Credentials;
 use aws_sdk_s3::config::Region;
 use aws_sdk_s3::Client as S3Client;
+use struxio_common::JobExecutionContext;
 use struxio_core::{
     gemini::GeminiClient,
     queue::{ExtractionJob, QueueConsumer},
@@ -65,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
     loop {
         match consumer.next_job().await {
             Ok(Some(job)) => {
-                tracing::info!(extraction_id = %job.extraction_id, "Processing extraction");
+                tracing::info!(extraction_id = %job.extraction_id, workspace_id = %job.workspace_id, "Processing extraction");
                 match process_extraction(&job, &pool, &storage, &gemini).await {
                     Ok(()) => {
                         consumer.ack(&job.stream_id).await?;
@@ -73,10 +74,15 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Err(e) => {
                         tracing::error!(extraction_id = %job.extraction_id, error = %e, "Extraction failed");
-                        ExtractionRepo::update_failed(&pool, job.extraction_id, &e.to_string())
-                            .await
-                            .ok();
-                        update_batch_progress_if_needed(&pool, job.batch_job_id).await;
+                        ExtractionRepo::update_failed(
+                            &pool,
+                            job.workspace_id,
+                            job.extraction_id,
+                            &e.to_string(),
+                        )
+                        .await
+                        .ok();
+                        update_batch_progress_if_needed(&pool, &job).await;
                         consumer.ack(&job.stream_id).await?;
                     }
                 }
@@ -96,13 +102,16 @@ async fn process_extraction(
     storage: &StorageClient,
     gemini: &GeminiClient,
 ) -> anyhow::Result<()> {
-    ExtractionRepo::update_status(pool, job.extraction_id, "processing").await?;
+    let ctx = JobExecutionContext::new(job.workspace_id);
+    let workspace_id = ctx.workspace_id();
 
-    let doc = DocumentRepo::find_by_id(pool, job.document_id)
+    ExtractionRepo::update_status(pool, workspace_id, job.extraction_id, "processing").await?;
+
+    let doc = DocumentRepo::find_by_id(pool, workspace_id, job.document_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Document not found"))?;
 
-    let template = TemplateRepo::find_by_id(pool, job.template_id)
+    let template = TemplateRepo::find_by_id(pool, workspace_id, job.template_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Template not found"))?;
 
@@ -123,6 +132,7 @@ async fn process_extraction(
 
     ExtractionRepo::update_result(
         pool,
+        workspace_id,
         job.extraction_id,
         &response.result,
         response.input_tokens,
@@ -131,22 +141,27 @@ async fn process_extraction(
     )
     .await?;
 
-    update_batch_progress_if_needed(pool, job.batch_job_id).await;
+    update_batch_progress_if_needed(pool, job).await;
 
     Ok(())
 }
 
-async fn update_batch_progress_if_needed(
-    pool: &sqlx::PgPool,
-    batch_job_id: Option<uuid::Uuid>,
-) {
-    let Some(batch_id) = batch_job_id else {
+async fn update_batch_progress_if_needed(pool: &sqlx::PgPool, job: &ExtractionJob) {
+    let Some(batch_id) = job.batch_job_id else {
         return;
     };
     let Ok((completed, failed)) =
-        ExtractionRepo::count_by_batch_status(pool, batch_id).await
+        ExtractionRepo::count_by_batch_status(pool, job.workspace_id, batch_id).await
     else {
         return;
     };
-    let _ = BatchJobRepo::update_progress(pool, batch_id, completed, failed, "processing").await;
+    let _ = BatchJobRepo::update_progress(
+        pool,
+        job.workspace_id,
+        batch_id,
+        completed,
+        failed,
+        "processing",
+    )
+    .await;
 }

@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use uuid::Uuid;
 
+use crate::principal::WorkspaceId;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtractionStatus {
@@ -48,6 +50,7 @@ impl Display for BatchStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     pub id: Uuid,
+    pub workspace_id: WorkspaceId,
     pub md5_hash: String,
     pub file_name: String,
     pub file_type: String,
@@ -60,6 +63,7 @@ pub struct Document {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractionTemplate {
     pub id: Uuid,
+    pub workspace_id: WorkspaceId,
     pub name: String,
     pub description: Option<String>,
     pub json_schema: serde_json::Value,
@@ -71,6 +75,7 @@ pub struct ExtractionTemplate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Extraction {
     pub id: Uuid,
+    pub workspace_id: WorkspaceId,
     pub document_id: Uuid,
     pub template_id: Uuid,
     pub batch_job_id: Option<Uuid>,
@@ -89,6 +94,7 @@ pub struct Extraction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchJob {
     pub id: Uuid,
+    pub workspace_id: WorkspaceId,
     pub template_id: Uuid,
     pub status: String,
     pub total_documents: i32,

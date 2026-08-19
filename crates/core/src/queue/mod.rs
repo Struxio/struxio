@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use struxio_common::WorkspaceId;
 use uuid::Uuid;
 
 pub mod redis;
@@ -23,7 +24,7 @@ pub struct ExtractionJob {
     pub extraction_id: Uuid,
     pub document_id: Uuid,
     pub template_id: Uuid,
-    pub org_id: Uuid,
+    pub workspace_id: WorkspaceId,
     pub batch_job_id: Option<Uuid>,
 }
 
@@ -41,7 +42,7 @@ pub trait QueueProducer: Clone + Send + Sync + 'static {
         extraction_id: Uuid,
         document_id: Uuid,
         template_id: Uuid,
-        org_id: Uuid,
+        workspace_id: WorkspaceId,
         batch_job_id: Option<Uuid>,
     ) -> Result<(), QueueError>;
 }

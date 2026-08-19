@@ -1,7 +1,7 @@
 use struxio_common::models::{
     CreateExtractionRequest, Extraction, ExtractionTemplate, InlineExtractionRequest,
 };
-use struxio_common::{mime::normalize_mime_type, AppError};
+use struxio_common::{mime::normalize_mime_type, AppError, PrincipalContext};
 use struxio_db::repositories::{
     documents::DocumentRepo,
     extractions::ExtractionRepo,
@@ -34,21 +34,26 @@ impl<Q: QueueProducer> ExtractionService<Q> {
 
     pub async fn create(
         &self,
+        ctx: &PrincipalContext,
         request: &CreateExtractionRequest,
     ) -> Result<Extraction, AppError> {
-        // Ensure document and template exist
-        DocumentRepo::find_by_id(&self.db, request.document_id)
+        DocumentRepo::find_by_id(&self.db, ctx.workspace_id(), request.document_id)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Document not found".to_string()))?;
 
-        TemplateRepo::find_by_id(&self.db, request.template_id)
+        let template = TemplateRepo::find_by_id(&self.db, ctx.workspace_id(), request.template_id)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Template not found".to_string()))?;
 
+        if !Self::can_access_template(ctx, &template) {
+            return Err(AppError::NotFound("Template not found".to_string()));
+        }
+
         let extraction = ExtractionRepo::create(
             &self.db,
+            ctx.workspace_id(),
             request.document_id,
             request.template_id,
             None,
@@ -61,8 +66,7 @@ impl<Q: QueueProducer> ExtractionService<Q> {
                 extraction.id,
                 extraction.document_id,
                 extraction.template_id,
-                // org_id is not used in queue messages for OSS; pass Uuid::nil() as placeholder
-                Uuid::nil(),
+                ctx.workspace_id(),
                 extraction.batch_job_id,
             )
             .await
@@ -73,15 +77,16 @@ impl<Q: QueueProducer> ExtractionService<Q> {
 
     pub async fn create_sync(
         &self,
+        ctx: &PrincipalContext,
         request: &CreateExtractionRequest,
         model_id: &str,
     ) -> Result<Extraction, AppError> {
-        let doc = DocumentRepo::find_by_id(&self.db, request.document_id)
+        let doc = DocumentRepo::find_by_id(&self.db, ctx.workspace_id(), request.document_id)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Document not found".to_string()))?;
 
-        let template = TemplateRepo::find_by_id(&self.db, request.template_id)
+        let template = TemplateRepo::find_by_id(&self.db, ctx.workspace_id(), request.template_id)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Template not found".to_string()))?;
@@ -91,6 +96,7 @@ impl<Q: QueueProducer> ExtractionService<Q> {
 
         let extraction = ExtractionRepo::create_with_status(
             &self.db,
+            ctx.workspace_id(),
             request.document_id,
             request.template_id,
             None,
@@ -115,6 +121,7 @@ impl<Q: QueueProducer> ExtractionService<Q> {
                 let processing_time_ms = start.elapsed().as_millis() as i32;
                 ExtractionRepo::update_completed(
                     &self.db,
+                    ctx.workspace_id(),
                     extraction.id,
                     &response.result,
                     response.input_tokens,
@@ -128,7 +135,7 @@ impl<Q: QueueProducer> ExtractionService<Q> {
             }
             Err(e) => {
                 let err_msg = e.to_string();
-                ExtractionRepo::update_failed(&self.db, extraction.id, &err_msg)
+                ExtractionRepo::update_failed(&self.db, ctx.workspace_id(), extraction.id, &err_msg)
                     .await
                     .map_err(|db_err| AppError::Database(db_err.to_string()))
             }
@@ -137,6 +144,7 @@ impl<Q: QueueProducer> ExtractionService<Q> {
 
     pub async fn create_inline(
         &self,
+        ctx: &PrincipalContext,
         request: &InlineExtractionRequest,
         model_id: &str,
     ) -> Result<Extraction, AppError> {
@@ -150,17 +158,20 @@ impl<Q: QueueProducer> ExtractionService<Q> {
             .decode(&request.file_base64)
             .map_err(|e| AppError::Validation(format!("Invalid base64: {e}")))?;
 
-        // 2. Compute MD5 for deduplication
         let md5_hash = format!("{:x}", md5::compute(&file_bytes));
 
-        // 3. Reuse existing document or upload + create a new one
-        let document = match DocumentRepo::find_by_hash(&self.db, &md5_hash)
+        let document = match DocumentRepo::find_by_hash(&self.db, ctx.workspace_id(), &md5_hash)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?
         {
             Some(doc) => doc,
             None => {
-                let s3_key = format!("{}/{}", uuid::Uuid::new_v4(), request.file_name);
+                let s3_key = format!(
+                    "{}/{}/{}",
+                    ctx.workspace_id().as_uuid(),
+                    uuid::Uuid::new_v4(),
+                    request.file_name
+                );
                 self.storage
                     .upload(&s3_key, &file_bytes, mime_type)
                     .await
@@ -168,6 +179,7 @@ impl<Q: QueueProducer> ExtractionService<Q> {
 
                 DocumentRepo::create(
                     &self.db,
+                    ctx.workspace_id(),
                     &md5_hash,
                     &request.file_name,
                     mime_type,
@@ -180,30 +192,31 @@ impl<Q: QueueProducer> ExtractionService<Q> {
             }
         };
 
-        // 4. Run synchronous extraction against the document
         let inline_req = CreateExtractionRequest {
             document_id: document.id,
             template_id: request.template_id,
         };
-        self.create_sync(&inline_req, model_id).await
+        self.create_sync(ctx, &inline_req, model_id).await
     }
 
-    pub async fn list(&self) -> Result<Vec<Extraction>, AppError> {
-        ExtractionRepo::list_all(&self.db)
+    pub async fn list(&self, ctx: &PrincipalContext) -> Result<Vec<Extraction>, AppError> {
+        ExtractionRepo::list_all(&self.db, ctx.workspace_id())
             .await
             .map_err(|e| AppError::Database(e.to_string()))
     }
 
-    pub async fn get(&self, extraction_id: Uuid) -> Result<Extraction, AppError> {
-        ExtractionRepo::find_by_id(&self.db, extraction_id)
+    pub async fn get(
+        &self,
+        ctx: &PrincipalContext,
+        extraction_id: Uuid,
+    ) -> Result<Extraction, AppError> {
+        ExtractionRepo::find_by_id(&self.db, ctx.workspace_id(), extraction_id)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Extraction not found".to_string()))
     }
 
-    fn _can_access_template(template: &ExtractionTemplate) -> bool {
-        // OSS: all templates are accessible — no org scoping
-        let _ = template;
-        true
+    fn can_access_template(ctx: &PrincipalContext, template: &ExtractionTemplate) -> bool {
+        template.workspace_id == ctx.workspace_id()
     }
 }

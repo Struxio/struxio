@@ -5,71 +5,77 @@ use axum::{
     Json, Router,
 };
 use struxio_common::models::{CreateTemplateRequest, ExtractionTemplate, UpdateTemplateRequest};
+use struxio_common::{PrincipalContext, Scope};
 
 use crate::errors::ApiError;
-use crate::middleware::auth_provider::AuthUser;
+use crate::middleware::auth_provider::require_scope;
 use crate::state::AppState;
 
 pub async fn list_templates(
-    _auth: AuthUser,
+    ctx: PrincipalContext,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ExtractionTemplate>>, ApiError> {
+    require_scope(&ctx, Scope::TemplatesRead).map_err(ApiError)?;
     let templates = state
         .template_service
-        .list()
+        .list(&ctx)
         .await
         .map_err(ApiError)?;
     Ok(Json(templates))
 }
 
 pub async fn get_template(
-    _auth: AuthUser,
+    ctx: PrincipalContext,
     State(state): State<AppState>,
     Path(path): Path<super::IdPath>,
 ) -> Result<Json<ExtractionTemplate>, ApiError> {
+    require_scope(&ctx, Scope::TemplatesRead).map_err(ApiError)?;
     let template = state
         .template_service
-        .get(path.id)
+        .get(&ctx, path.id)
         .await
         .map_err(ApiError)?;
     Ok(Json(template))
 }
 
 pub async fn create_template(
-    _auth: AuthUser,
+    ctx: PrincipalContext,
     State(state): State<AppState>,
     Json(body): Json<CreateTemplateRequest>,
 ) -> Result<(StatusCode, Json<ExtractionTemplate>), ApiError> {
+    require_scope(&ctx, Scope::TemplatesWrite).map_err(ApiError)?;
     let template = state
         .template_service
-        .create(&body)
+        .create(&ctx, &body)
         .await
         .map_err(ApiError)?;
     Ok((StatusCode::CREATED, Json(template)))
 }
 
 pub async fn update_template(
-    _auth: AuthUser,
+    ctx: PrincipalContext,
     State(state): State<AppState>,
     Path(path): Path<super::IdPath>,
     Json(body): Json<UpdateTemplateRequest>,
 ) -> Result<Json<ExtractionTemplate>, ApiError> {
+    require_scope(&ctx, Scope::TemplatesWrite).map_err(ApiError)?;
     let template = state
         .template_service
-        .update(path.id, &body)
+        .update(&ctx, path.id, &body)
         .await
         .map_err(ApiError)?;
     Ok(Json(template))
 }
 
 pub async fn delete_template(
-    _auth: AuthUser,
+    ctx: PrincipalContext,
     State(state): State<AppState>,
     Path(path): Path<super::IdPath>,
 ) -> Result<StatusCode, ApiError> {
+    require_scope(&ctx, Scope::TemplatesWrite).map_err(ApiError)?;
     let deleted = state
         .template_service
-        .delete(path.id)
+        .delete(&ctx, path.id)
         .await
         .map_err(ApiError)?;
     if !deleted {

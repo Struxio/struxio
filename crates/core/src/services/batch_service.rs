@@ -1,5 +1,5 @@
 use struxio_common::models::{BatchJob, CreateBatchRequest, Extraction};
-use struxio_common::AppError;
+use struxio_common::{AppError, PrincipalContext};
 use struxio_db::repositories::{
     batch_jobs::BatchJobRepo,
     documents::DocumentRepo,
@@ -24,10 +24,11 @@ impl<Q: QueueProducer> BatchService<Q> {
 
     pub async fn create(
         &self,
+        ctx: &PrincipalContext,
         request: &CreateBatchRequest,
         model_id: &str,
     ) -> Result<BatchJob, AppError> {
-        TemplateRepo::find_by_id(&self.db, request.template_id)
+        TemplateRepo::find_by_id(&self.db, ctx.workspace_id(), request.template_id)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Template not found".to_string()))?;
@@ -37,18 +38,24 @@ impl<Q: QueueProducer> BatchService<Q> {
             return Err(AppError::Validation("document_ids must not be empty".to_string()));
         }
 
-        let batch = BatchJobRepo::create(&self.db, request.template_id, total_documents)
-            .await
-            .map_err(|e| AppError::Database(e.to_string()))?;
+        let batch = BatchJobRepo::create(
+            &self.db,
+            ctx.workspace_id(),
+            request.template_id,
+            total_documents,
+        )
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
 
         for doc_id in &request.document_ids {
-            DocumentRepo::find_by_id(&self.db, *doc_id)
+            DocumentRepo::find_by_id(&self.db, ctx.workspace_id(), *doc_id)
                 .await
                 .map_err(|e| AppError::Database(e.to_string()))?
                 .ok_or_else(|| AppError::NotFound("Document not found".to_string()))?;
 
             let extraction = ExtractionRepo::create(
                 &self.db,
+                ctx.workspace_id(),
                 *doc_id,
                 request.template_id,
                 Some(batch.id),
@@ -61,7 +68,7 @@ impl<Q: QueueProducer> BatchService<Q> {
                     extraction.id,
                     extraction.document_id,
                     extraction.template_id,
-                    Uuid::nil(),
+                    ctx.workspace_id(),
                     extraction.batch_job_id,
                 )
                 .await
@@ -72,24 +79,27 @@ impl<Q: QueueProducer> BatchService<Q> {
         Ok(batch)
     }
 
-    pub async fn list(&self) -> Result<Vec<BatchJob>, AppError> {
-        BatchJobRepo::list_all(&self.db)
+    pub async fn list(&self, ctx: &PrincipalContext) -> Result<Vec<BatchJob>, AppError> {
+        BatchJobRepo::list_all(&self.db, ctx.workspace_id())
             .await
             .map_err(|e| AppError::Database(e.to_string()))
     }
 
-    pub async fn get(&self, batch_id: Uuid) -> Result<BatchJob, AppError> {
-        BatchJobRepo::find_by_id(&self.db, batch_id)
+    pub async fn get(&self, ctx: &PrincipalContext, batch_id: Uuid) -> Result<BatchJob, AppError> {
+        BatchJobRepo::find_by_id(&self.db, ctx.workspace_id(), batch_id)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Batch not found".to_string()))
     }
 
-    pub async fn list_extractions(&self, batch_id: Uuid) -> Result<Vec<Extraction>, AppError> {
-        // Verify batch exists first
-        self.get(batch_id).await?;
+    pub async fn list_extractions(
+        &self,
+        ctx: &PrincipalContext,
+        batch_id: Uuid,
+    ) -> Result<Vec<Extraction>, AppError> {
+        self.get(ctx, batch_id).await?;
 
-        ExtractionRepo::list_by_batch(&self.db, batch_id)
+        ExtractionRepo::list_by_batch(&self.db, ctx.workspace_id(), batch_id)
             .await
             .map_err(|e| AppError::Database(e.to_string()))
     }

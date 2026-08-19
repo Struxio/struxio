@@ -2,8 +2,10 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::config::Region;
 use aws_sdk_s3::Client as S3Client;
 use sqlx::PgPool;
-use struxio_common::config::Config;
 use std::time::Duration;
+use struxio_common::config::Config;
+use struxio_common::PrincipalContext;
+use struxio_db::repositories::workspaces::WorkspaceRepo;
 use struxio_core::{
     gemini::GeminiClient,
     queue::redis::RedisProducer,
@@ -29,6 +31,8 @@ pub struct AppState {
     pub batch_service: BatchService<RedisProducer>,
     pub model_service: ModelService,
     pub gemini: GeminiClient,
+    /// Seeded local OSS operator. Loaded from Postgres, never a nil UUID.
+    pub local_principal: PrincipalContext,
 }
 
 impl AppState {
@@ -54,6 +58,7 @@ impl AppState {
             config.gemini_model.clone(),
             Duration::from_secs(config.gemini_timeout_secs),
         )?;
+        let local_principal = WorkspaceRepo::load_local_principal_or_err(&db_pool).await?;
 
         Ok(Self {
             config: config.clone(),
@@ -70,6 +75,7 @@ impl AppState {
             batch_service: BatchService::new(db_pool.clone(), queue),
             model_service: ModelService::new(db_pool, config.gemini_model.clone()),
             gemini,
+            local_principal,
         })
     }
 }

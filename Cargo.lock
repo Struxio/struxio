@@ -3149,6 +3149,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "struxio-common",
+ "tokio",
  "tracing",
  "uuid",
 ]
