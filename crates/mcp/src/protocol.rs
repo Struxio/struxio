@@ -1,616 +1,318 @@
-use crate::adapter::{
-    parse_input, BatchInput, BatchStatusInput, ExtractionStatusInput, InlineInput, McpBackend,
-    McpError, McpResult, MAX_MESSAGE_BYTES,
-};
-use serde::{Deserialize, Serialize};
+// SPDX-License-Identifier: AGPL-3.0-only
+
 use serde_json::{json, Map, Value};
-use std::io;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt};
 
-const PROTOCOL_VERSION: &str = "2024-11-05";
+use crate::error::{McpError, McpResult};
 
-#[derive(Debug, Deserialize)]
-struct JsonRpcRequest {
-    jsonrpc: String,
-    #[serde(default)]
-    id: Option<Value>,
-    method: String,
-    #[serde(default)]
-    params: Option<Value>,
+/// Preferred MCP protocol revision advertised by this server.
+pub const PREFERRED_PROTOCOL_VERSION: &str = "2025-03-26";
+
+/// Protocol revisions this stdio server will echo back from `initialize`.
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
+
+/// Parsed inbound JSON-RPC message.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Inbound {
+    Request {
+        id: Value,
+        method: String,
+        params: Value,
+    },
+    Notification {
+        method: String,
+        params: Value,
+    },
 }
 
-#[derive(Debug, Serialize)]
-struct JsonRpcResponse {
-    jsonrpc: &'static str,
-    id: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<JsonRpcError>,
+/// Parse one newline-stripped JSON-RPC message.
+///
+/// JSON-RPC batches (top-level arrays) are rejected. Message size must be
+/// checked by the transport before calling this function.
+pub fn parse_inbound(bytes: &[u8]) -> Result<Inbound, ProtocolError> {
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| ProtocolError::Parse)?;
+    if value.is_array() {
+        return Err(ProtocolError::BatchesNotSupported);
+    }
+    let object = value.as_object().ok_or(ProtocolError::InvalidRequest)?;
+    match object.get("jsonrpc").and_then(Value::as_str) {
+        Some("2.0") => {}
+        _ => return Err(ProtocolError::InvalidRequest),
+    }
+    let method = object
+        .get("method")
+        .and_then(Value::as_str)
+        .filter(|method| !method.is_empty())
+        .ok_or(ProtocolError::InvalidRequest)?
+        .to_string();
+    let params = object.get("params").cloned().unwrap_or_else(|| json!({}));
+    match object.get("id") {
+        None => Ok(Inbound::Notification { method, params }),
+        Some(id) => Ok(Inbound::Request {
+            id: id.clone(),
+            method,
+            params,
+        }),
+    }
 }
 
-#[derive(Debug, Serialize)]
-struct JsonRpcError {
-    code: i32,
-    message: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<Value>,
+/// Transport / JSON-RPC failures that never invoke a tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolError {
+    Parse,
+    InvalidRequest,
+    BatchesNotSupported,
+    MessageTooLarge,
+    NotInitialized,
+    MethodNotFound,
 }
 
-#[derive(Debug, Serialize)]
-struct ErrorEnvelope<'a> {
-    error: ErrorDetail<'a>,
+impl ProtocolError {
+    pub fn code(self) -> i32 {
+        match self {
+            Self::Parse => -32700,
+            Self::InvalidRequest
+            | Self::BatchesNotSupported
+            | Self::MessageTooLarge
+            | Self::NotInitialized => -32600,
+            Self::MethodNotFound => -32601,
+        }
+    }
+
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Parse => "parse error",
+            Self::InvalidRequest => "invalid request",
+            Self::BatchesNotSupported => "json-rpc batches are not supported",
+            Self::MessageTooLarge => "message too large",
+            Self::NotInitialized => "server not initialized",
+            Self::MethodNotFound => "method not found",
+        }
+    }
 }
 
-#[derive(Debug, Serialize)]
-struct ErrorDetail<'a> {
-    code: &'a str,
-    message: &'a str,
+/// JSON-RPC success or error object, serialized without embedded newlines.
+#[derive(Debug, Clone)]
+pub struct JsonRpcResponse {
+    pub id: Value,
+    pub payload: JsonRpcPayload,
 }
 
-#[derive(Debug, Serialize)]
-struct ToolCallResult {
-    content: [ToolContent; 1],
-    #[serde(rename = "isError")]
-    is_error: bool,
+#[derive(Debug, Clone)]
+pub enum JsonRpcPayload {
+    Result(Value),
+    Error {
+        code: i32,
+        message: String,
+        data: Option<Value>,
+    },
 }
 
-#[derive(Debug, Serialize)]
-struct ToolContent {
-    #[serde(rename = "type")]
-    content_type: &'static str,
-    text: String,
-}
-
-#[derive(Debug, Serialize)]
-struct Tool {
-    name: &'static str,
-    description: &'static str,
-    #[serde(rename = "inputSchema")]
-    input_schema: Value,
-}
-
-#[derive(Debug, Serialize)]
-struct ToolsList {
-    tools: Vec<Tool>,
-}
-
-#[derive(Debug, Serialize)]
-struct InitializeResult {
-    #[serde(rename = "protocolVersion")]
-    protocol_version: &'static str,
-    capabilities: Map<String, Value>,
-    #[serde(rename = "serverInfo")]
-    server_info: ServerInfo,
-}
-
-#[derive(Debug, Serialize)]
-struct ServerInfo {
-    name: &'static str,
-    version: &'static str,
-}
-
-#[derive(Debug)]
-enum ReadMessage {
-    Eof,
-    Line(Vec<u8>),
-    TooLarge,
-}
-
-/// MCP stdio JSON-RPC server. Stdout is reserved for protocol messages.
-pub struct McpServer<B> {
-    backend: B,
-    max_message_bytes: usize,
-}
-
-impl<B> McpServer<B> {
-    pub fn new(backend: B) -> Self {
+impl JsonRpcResponse {
+    pub fn result(id: Value, result: Value) -> Self {
         Self {
-            backend,
-            max_message_bytes: MAX_MESSAGE_BYTES,
-        }
-    }
-
-    pub fn with_max_message_bytes(mut self, max_message_bytes: usize) -> Self {
-        self.max_message_bytes = max_message_bytes.max(1);
-        self
-    }
-}
-
-impl<B: McpBackend> McpServer<B> {
-    pub async fn handle_json(&self, input: &[u8]) -> Option<Vec<u8>> {
-        match serde_json::from_slice::<JsonRpcRequest>(input) {
-            Ok(request) => self.handle_request(request).await,
-            Err(_) => Some(self.protocol_error(None, -32700, "parse error")),
-        }
-    }
-
-    async fn handle_request(&self, request: JsonRpcRequest) -> Option<Vec<u8>> {
-        if request.jsonrpc != "2.0" {
-            return Some(self.protocol_error(request.id, -32600, "invalid request"));
-        }
-
-        if request.id.is_none() {
-            // Notifications, including `notifications/initialized`, do not
-            // receive a response. They also cannot invoke a tool.
-            return None;
-        }
-
-        let id = request.id;
-        let is_tool_call = request.method == "tools/call";
-        let result = match request.method.as_str() {
-            "initialize" => Ok(json!(InitializeResult {
-                protocol_version: PROTOCOL_VERSION,
-                capabilities: Map::from_iter([("tools".to_string(), json!({}))]),
-                server_info: ServerInfo {
-                    name: "struxio",
-                    version: env!("CARGO_PKG_VERSION"),
-                },
-            })),
-            "tools/list" => Ok(json!(ToolsList {
-                tools: tool_definitions(),
-            })),
-            "tools/call" => self.call_tool(request.params).await,
-            "ping" => Ok(json!({})),
-            _ => Err(McpError::Request {
-                code: "method_not_found",
-                message: "method not found".to_string(),
-            }),
-        };
-
-        Some(if is_tool_call {
-            match result {
-                Ok(result) => self.success(id, tool_success_result(result)),
-                Err(error) => self.success(id, tool_error_result(&error)),
-            }
-        } else {
-            match result {
-                Ok(result) => self.success(id, result),
-                Err(_) => self.protocol_error(id, -32601, "method not found"),
-            }
-        })
-    }
-
-    async fn call_tool(&self, params: Option<Value>) -> McpResult<Value> {
-        let params = params.ok_or_else(|| McpError::invalid_arguments("tool name is required"))?;
-        let object = params
-            .as_object()
-            .ok_or_else(|| McpError::invalid_arguments("tools/call params must be an object"))?;
-        let name = object
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| McpError::invalid_arguments("tool name is required"))?;
-        let arguments = object.get("arguments").cloned();
-
-        match name {
-            "list_templates" => {
-                let _: Map<String, Value> = parse_input(arguments)?;
-                self.backend.list_templates().await.and_then(to_json_value)
-            }
-            "extract_inline" => {
-                let input: InlineInput = parse_input(arguments)?;
-                self.backend
-                    .extract_inline(input)
-                    .await
-                    .and_then(to_json_value)
-            }
-            "get_extraction_status" => {
-                let input: ExtractionStatusInput = parse_input(arguments)?;
-                self.backend
-                    .extraction_status(input)
-                    .await
-                    .and_then(to_json_value)
-            }
-            "submit_batch" => {
-                let input: BatchInput = parse_input(arguments)?;
-                self.backend
-                    .submit_batch(input)
-                    .await
-                    .and_then(to_json_value)
-            }
-            "get_batch_status" => {
-                let input: BatchStatusInput = parse_input(arguments)?;
-                self.backend
-                    .batch_status(input)
-                    .await
-                    .and_then(to_json_value)
-            }
-            _ => Err(McpError::Request {
-                code: "tool_not_found",
-                message: "tool not found".to_string(),
-            }),
-        }
-    }
-
-    fn success(&self, id: Option<Value>, result: Value) -> Vec<u8> {
-        serialize_response(JsonRpcResponse {
-            jsonrpc: "2.0",
             id,
-            result: Some(result),
-            error: None,
-        })
+            payload: JsonRpcPayload::Result(result),
+        }
     }
 
-    fn protocol_error(&self, id: Option<Value>, code: i32, message: &'static str) -> Vec<u8> {
-        let data = if code == -32601 {
-            Some(json!(ErrorEnvelope {
-                error: ErrorDetail {
-                    code: "method_not_found",
-                    message,
-                },
-            }))
-        } else {
-            None
-        };
-        serialize_response(JsonRpcResponse {
-            jsonrpc: "2.0",
+    pub fn protocol_error(id: Value, error: ProtocolError) -> Self {
+        Self {
             id,
-            result: None,
-            error: Some(JsonRpcError {
+            payload: JsonRpcPayload::Error {
+                code: error.code(),
+                message: error.message().to_string(),
+                data: Some(json!({
+                    "error": {
+                        "code": match error {
+                            ProtocolError::Parse => "parse_error",
+                            ProtocolError::InvalidRequest => "invalid_request",
+                            ProtocolError::BatchesNotSupported => "batches_not_supported",
+                            ProtocolError::MessageTooLarge => "message_too_large",
+                            ProtocolError::NotInitialized => "not_initialized",
+                            ProtocolError::MethodNotFound => "method_not_found",
+                        },
+                        "message": error.message(),
+                    }
+                })),
+            },
+        }
+    }
+
+    pub fn invalid_params(id: Value, error: &McpError) -> Self {
+        Self {
+            id,
+            payload: JsonRpcPayload::Error {
+                code: -32602,
+                message: "invalid params".to_string(),
+                data: Some(
+                    serde_json::to_value(error.clone().into_envelope())
+                        .unwrap_or_else(|_| json!({"error":{"code":"invalid_arguments","message":"invalid params"}})),
+                ),
+            },
+        }
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        let value = match &self.payload {
+            JsonRpcPayload::Result(result) => json!({
+                "jsonrpc": "2.0",
+                "id": self.id,
+                "result": result,
+            }),
+            JsonRpcPayload::Error {
                 code,
                 message,
                 data,
-            }),
+            } => {
+                let mut error = Map::from_iter([
+                    ("code".to_string(), json!(code)),
+                    ("message".to_string(), json!(message)),
+                ]);
+                if let Some(data) = data {
+                    error.insert("data".to_string(), data.clone());
+                }
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": self.id,
+                    "error": error,
+                })
+            }
+        };
+        match serde_json::to_vec(&value) {
+            Ok(bytes) if !bytes.contains(&b'\n') => bytes,
+            Ok(_) | Err(_) => {
+                br#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"internal error"}}"#
+                    .to_vec()
+            }
+        }
+    }
+}
+
+/// Negotiate an MCP protocol version. Unknown client versions fall back to
+/// [`PREFERRED_PROTOCOL_VERSION`].
+pub fn negotiate_version(requested: Option<&str>) -> &'static str {
+    requested
+        .and_then(|requested| {
+            SUPPORTED_PROTOCOL_VERSIONS
+                .iter()
+                .copied()
+                .find(|supported| *supported == requested)
         })
-    }
-
-    /// Serve newline-delimited JSON-RPC over stdin/stdout.
-    pub async fn serve_stdio(&self) -> io::Result<()> {
-        let stdin = tokio::io::stdin();
-        let stdout = tokio::io::stdout();
-        let mut reader = tokio::io::BufReader::new(stdin);
-        let mut writer = tokio::io::BufWriter::new(stdout);
-
-        loop {
-            match read_bounded_message(&mut reader, self.max_message_bytes).await? {
-                ReadMessage::Eof => return Ok(()),
-                ReadMessage::TooLarge => {
-                    writer
-                        .write_all(&self.protocol_error(None, -32600, "message too large"))
-                        .await?;
-                    writer.write_all(b"\n").await?;
-                    writer.flush().await?;
-                }
-                ReadMessage::Line(line) => {
-                    if line.iter().all(u8::is_ascii_whitespace) {
-                        continue;
-                    }
-                    if let Some(response) = self.handle_json(&line).await {
-                        writer.write_all(&response).await?;
-                        writer.write_all(b"\n").await?;
-                        writer.flush().await?;
-                    }
-                }
-            }
-        }
-    }
+        .unwrap_or(PREFERRED_PROTOCOL_VERSION)
 }
 
-fn serialize_response(response: JsonRpcResponse) -> Vec<u8> {
-    serde_json::to_vec(&response).expect("JSON-RPC response types are serializable")
-}
-
-fn to_json_value<T: Serialize>(value: T) -> McpResult<Value> {
-    serde_json::to_value(value).map_err(|_| McpError::Request {
-        code: "serialization_error",
-        message: "failed to serialize tool result".to_string(),
-    })
-}
-
-fn tool_error_result(error: &McpError) -> Value {
-    let envelope = ErrorEnvelope {
-        error: ErrorDetail {
-            code: error.code(),
-            message: error.message(),
-        },
-    };
-    json!(ToolCallResult {
-        content: [ToolContent {
-            content_type: "text",
-            text: serde_json::to_string(&envelope).expect("error envelope is serializable"),
-        }],
-        is_error: true,
-    })
-}
-
-fn tool_success_result(value: Value) -> Value {
-    json!(ToolCallResult {
-        content: [ToolContent {
-            content_type: "text",
-            text: serde_json::to_string(&value).expect("tool result is JSON"),
-        }],
-        is_error: false,
-    })
-}
-
-fn tool_definitions() -> Vec<Tool> {
-    vec![
-        Tool {
-            name: "list_templates",
-            description: "List extraction templates visible in the authenticated workspace.",
-            input_schema: object_schema(Map::new(), Vec::new()),
-        },
-        Tool {
-            name: "extract_inline",
-            description: "Extract one base64-encoded document with a workspace template. Maximum decoded input is 8 MiB.",
-            input_schema: object_schema(
-                Map::from_iter([
-                    ("file_name".to_string(), json!({"type": "string", "maxLength": 255})),
-                    ("file_type".to_string(), json!({"type": "string", "maxLength": 64})),
-                    ("file_base64".to_string(), json!({"type": "string"})),
-                    (
-                        "template_id".to_string(),
-                        json!({"type": "string", "format": "uuid"}),
-                    ),
-                ]),
-                vec![
-                    "file_name".to_string(),
-                    "file_type".to_string(),
-                    "file_base64".to_string(),
-                    "template_id".to_string(),
-                ],
-            ),
-        },
-        Tool {
-            name: "get_extraction_status",
-            description: "Get one extraction and its current result or failure status.",
-            input_schema: uuid_schema("extraction_id"),
-        },
-        Tool {
-            name: "submit_batch",
-            description: "Submit up to 100 existing workspace documents for asynchronous extraction.",
-            input_schema: object_schema(
-                Map::from_iter([
-                    (
-                        "document_ids".to_string(),
-                        json!({
-                            "type": "array",
-                            "minItems": 1,
-                            "maxItems": 100,
-                            "items": {"type": "string", "format": "uuid"}
-                        }),
-                    ),
-                    (
-                        "template_id".to_string(),
-                        json!({"type": "string", "format": "uuid"}),
-                    ),
-                ]),
-                vec!["document_ids".to_string(), "template_id".to_string()],
-            ),
-        },
-        Tool {
-            name: "get_batch_status",
-            description: "Get one batch job and its progress in the authenticated workspace.",
-            input_schema: uuid_schema("batch_id"),
-        },
-    ]
-}
-
-fn uuid_schema(field: &str) -> Value {
-    object_schema(
-        Map::from_iter([(
-            field.to_string(),
-            json!({"type": "string", "format": "uuid"}),
-        )]),
-        vec![field.to_string()],
-    )
-}
-
-fn object_schema(properties: Map<String, Value>, required: Vec<String>) -> Value {
+pub fn tool_success(value: Value) -> Value {
     json!({
-        "type": "object",
-        "properties": properties,
-        "required": required,
-        "additionalProperties": false
+        "content": [{
+            "type": "text",
+            "text": value.to_string(),
+        }],
+        "structuredContent": value,
+        "isError": false
     })
 }
 
-async fn read_bounded_message<R>(reader: &mut R, max_bytes: usize) -> io::Result<ReadMessage>
-where
-    R: AsyncBufRead + Unpin,
-{
-    let mut line = Vec::new();
-    let mut too_large = false;
-
-    loop {
-        let chunk = reader.fill_buf().await?;
-        if chunk.is_empty() {
-            if line.is_empty() && !too_large {
-                return Ok(ReadMessage::Eof);
-            }
-            return Ok(if too_large {
-                ReadMessage::TooLarge
-            } else {
-                ReadMessage::Line(line)
-            });
-        }
-
-        let newline = chunk.iter().position(|byte| *byte == b'\n');
-        let consume = newline.map_or(chunk.len(), |position| position + 1);
-        let data_len = newline.unwrap_or(chunk.len());
-        if !too_large {
-            if line.len() + consume > max_bytes {
-                too_large = true;
-            } else {
-                line.extend_from_slice(&chunk[..data_len]);
-            }
-        }
-        reader.consume(consume);
-
-        if newline.is_some() {
-            return Ok(if too_large {
-                ReadMessage::TooLarge
-            } else {
-                ReadMessage::Line(line)
-            });
-        }
-    }
+pub fn tool_error(error: McpError) -> Value {
+    let envelope = error.into_envelope();
+    let text = serde_json::to_string(&envelope).unwrap_or_else(|_| {
+        r#"{"error":{"code":"internal_error","message":"internal error"}}"#.to_string()
+    });
+    json!({
+        "content": [{
+            "type": "text",
+            "text": text,
+        }],
+        "structuredContent": envelope,
+        "isError": true
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::{
-        BatchInput, BatchStatusInput, ExtractionStatusInput, InlineInput, McpBackend, McpResult,
-    };
-    use async_trait::async_trait;
-    use serde_json::json;
-    use uuid::Uuid;
 
-    #[derive(Default)]
-    struct FakeBackend;
-
-    #[async_trait]
-    impl McpBackend for FakeBackend {
-        async fn list_templates(
-            &self,
-        ) -> McpResult<Vec<struxio_common::models::ExtractionTemplate>> {
-            Ok(Vec::new())
+    #[test]
+    fn parser_accepts_requests_and_notifications() {
+        let request = parse_inbound(br#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#).unwrap();
+        match request {
+            Inbound::Request { id, method, params } => {
+                assert_eq!(id, json!(1));
+                assert_eq!(method, "ping");
+                assert_eq!(params, json!({}));
+            }
+            Inbound::Notification { .. } => panic!("expected request"),
         }
 
-        async fn extract_inline(
-            &self,
-            _input: InlineInput,
-        ) -> McpResult<struxio_common::models::Extraction> {
-            Err(McpError::Request {
-                code: "input_too_large",
-                message: "decoded inline input exceeds 8388608 bytes".to_string(),
-            })
-        }
-
-        async fn extraction_status(
-            &self,
-            _input: ExtractionStatusInput,
-        ) -> McpResult<struxio_common::models::Extraction> {
-            Err(McpError::from_app(struxio_common::AppError::NotFound(
-                "hidden".to_string(),
-            )))
-        }
-
-        async fn submit_batch(
-            &self,
-            _input: BatchInput,
-        ) -> McpResult<struxio_common::models::BatchJob> {
-            Err(McpError::invalid_arguments("not used"))
-        }
-
-        async fn batch_status(
-            &self,
-            _input: BatchStatusInput,
-        ) -> McpResult<struxio_common::models::BatchJob> {
-            Err(McpError::invalid_arguments("not used"))
-        }
+        let notification =
+            parse_inbound(br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).unwrap();
+        assert!(matches!(
+            notification,
+            Inbound::Notification { method, .. } if method == "notifications/initialized"
+        ));
     }
 
-    #[tokio::test]
-    async fn tools_list_exposes_only_the_small_supported_surface() {
-        let server = McpServer::new(FakeBackend);
-        let response = server
-            .handle_json(br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
-            .await
-            .unwrap();
-        let value: Value = serde_json::from_slice(&response).unwrap();
-        let names: Vec<&str> = value["result"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap())
-            .collect();
+    #[test]
+    fn parser_rejects_malformed_and_non_2_0_messages() {
+        assert_eq!(parse_inbound(b"{").unwrap_err(), ProtocolError::Parse);
         assert_eq!(
-            names,
-            vec![
-                "list_templates",
-                "extract_inline",
-                "get_extraction_status",
-                "submit_batch",
-                "get_batch_status"
-            ]
+            parse_inbound(br#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#).unwrap_err(),
+            ProtocolError::InvalidRequest
         );
-    }
-
-    #[tokio::test]
-    async fn tool_errors_are_stable_json_envelopes() {
-        let server = McpServer::new(FakeBackend);
-        let response = server
-            .handle_json(
-                json!({
-                    "jsonrpc": "2.0",
-                    "id": "x",
-                    "method": "tools/call",
-                    "params": {
-                        "name": "get_extraction_status",
-                        "arguments": {"extraction_id": Uuid::new_v4()}
-                    }
-                })
-                .to_string()
-                .as_bytes(),
-            )
-            .await
-            .unwrap();
-        let value: Value = serde_json::from_slice(&response).unwrap();
-        assert_eq!(value["result"]["isError"], true);
         assert_eq!(
-            serde_json::from_str::<Value>(value["result"]["content"][0]["text"].as_str().unwrap())
-                .unwrap(),
-            json!({"error": {"code": "not_found", "message": "resource not found"}})
+            parse_inbound(br#"{"jsonrpc":"2.0","id":1}"#).unwrap_err(),
+            ProtocolError::InvalidRequest
         );
-    }
-
-    #[tokio::test]
-    async fn malformed_protocol_messages_return_json_rpc_errors() {
-        let server = McpServer::new(FakeBackend);
-        let response = server.handle_json(b"{").await.unwrap();
-        let value: Value = serde_json::from_slice(&response).unwrap();
-        assert_eq!(value["error"]["code"], -32700);
-        assert_eq!(value["id"], Value::Null);
-    }
-
-    #[tokio::test]
-    async fn notifications_do_not_write_responses() {
-        let server = McpServer::new(FakeBackend);
-        assert!(server
-            .handle_json(br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
-            .await
-            .is_none());
-    }
-
-    #[tokio::test]
-    async fn tool_arguments_reject_unknown_fields() {
-        let server = McpServer::new(FakeBackend);
-        let response = server
-            .handle_json(
-                br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_batch_status","arguments":{"batch_id":"00000000-0000-0000-0000-000000000001","unexpected":true}}}"#,
-            )
-            .await
-            .unwrap();
-        let value: Value = serde_json::from_slice(&response).unwrap();
-        let text = value["result"]["content"][0]["text"].as_str().unwrap();
         assert_eq!(
-            serde_json::from_str::<Value>(text).unwrap()["error"]["code"],
-            "invalid_arguments"
+            parse_inbound(br#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#).unwrap_err(),
+            ProtocolError::BatchesNotSupported
+        );
+        assert_eq!(
+            parse_inbound(br#""ping""#).unwrap_err(),
+            ProtocolError::InvalidRequest
         );
     }
 
     #[test]
-    fn bounded_message_reader_does_not_accept_a_large_line() {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        runtime.block_on(async {
-            let mut reader = tokio::io::BufReader::new(&b"12345\n"[..]);
-            assert!(matches!(
-                read_bounded_message(&mut reader, 4).await.unwrap(),
-                ReadMessage::TooLarge
-            ));
-        });
+    fn parser_preserves_string_and_null_ids() {
+        let inbound =
+            parse_inbound(br#"{"jsonrpc":"2.0","id":"abc","method":"ping","params":{}}"#).unwrap();
+        match inbound {
+            Inbound::Request { id, .. } => assert_eq!(id, json!("abc")),
+            Inbound::Notification { .. } => panic!("expected request"),
+        }
+        let inbound = parse_inbound(br#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#).unwrap();
+        match inbound {
+            Inbound::Request { id, .. } => assert_eq!(id, Value::Null),
+            Inbound::Notification { .. } => panic!("expected request"),
+        }
     }
 
     #[test]
-    fn successful_results_are_wrapped_for_mcp_clients() {
+    fn version_negotiation_falls_back_to_preferred() {
+        assert_eq!(negotiate_version(Some("2024-11-05")), "2024-11-05");
+        assert_eq!(negotiate_version(Some("2025-06-18")), "2025-06-18");
         assert_eq!(
-            tool_success_result(json!({"ok": true})),
-            json!({
-                "content": [{"type": "text", "text": "{\"ok\":true}"}],
-                "isError": false
-            })
+            negotiate_version(Some("1999-01-01")),
+            PREFERRED_PROTOCOL_VERSION
         );
+        assert_eq!(negotiate_version(None), PREFERRED_PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn encoded_responses_never_contain_newlines() {
+        let response = JsonRpcResponse::result(json!(1), json!({"ok": true, "note": "line"}));
+        let encoded = response.encode();
+        assert!(!encoded.contains(&b'\n'));
+        let parsed: Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(parsed["jsonrpc"], "2.0");
+        assert_eq!(parsed["result"]["ok"], true);
+    }
+
+    #[test]
+    fn protocol_errors_use_stable_data_envelope() {
+        let encoded = JsonRpcResponse::protocol_error(Value::Null, ProtocolError::Parse).encode();
+        let parsed: Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(parsed["error"]["code"], -32700);
+        assert_eq!(parsed["error"]["data"]["error"]["code"], "parse_error");
     }
 }
