@@ -171,7 +171,7 @@ async fn handle_job(runtime: &WorkerRuntime, job: ExtractionJob) -> anyhow::Resu
                 .dead_letter_job(&job, "extraction row not found")
                 .await?;
             runtime.consumer.ack(&job.stream_id).await?;
-            return Ok(());
+            Ok(())
         }
         Ok(ClaimOutcome::SkipTerminal(existing)) => {
             tracing::info!(
@@ -180,39 +180,41 @@ async fn handle_job(runtime: &WorkerRuntime, job: ExtractionJob) -> anyhow::Resu
                 "Skipping already-terminal extraction"
             );
             runtime.consumer.ack(&job.stream_id).await?;
-            return Ok(());
+            Ok(())
         }
         Ok(ClaimOutcome::Run(claimed)) => {
             let snapshot = snapshot_of(&claimed);
             if snapshot.attempt > runtime.policy.max_attempts {
                 finish_dead_letter(runtime, &job, snapshot, "attempts exhausted").await?;
-                return Ok(());
-            }
-            match process_extraction(&job, runtime).await {
-                Ok(success) => {
-                    ExtractionRepo::apply_completed(
-                        &runtime.pool,
-                        job.workspace_id,
-                        job.extraction_id,
-                        &success.result,
-                        success.input_tokens,
-                        success.output_tokens,
-                        success.processing_time_ms,
-                        &runtime.model_id,
-                    )
-                    .await?;
-                    runtime.consumer.ack(&job.stream_id).await?;
-                    tracing::info!(extraction_id = %job.extraction_id, "Extraction completed");
-                    Ok(())
-                }
-                Err(error) => {
-                    let decision = step(
-                        snapshot,
-                        event_for_error(&error),
-                        runtime.policy,
-                        rand_jitter(),
-                    );
-                    apply_failure_decision(runtime, &job, decision.action, error.message()).await
+                Ok(())
+            } else {
+                match process_extraction(&job, runtime).await {
+                    Ok(success) => {
+                        ExtractionRepo::apply_completed(
+                            &runtime.pool,
+                            job.workspace_id,
+                            job.extraction_id,
+                            &success.result,
+                            success.input_tokens,
+                            success.output_tokens,
+                            success.processing_time_ms,
+                            &runtime.model_id,
+                        )
+                        .await?;
+                        runtime.consumer.ack(&job.stream_id).await?;
+                        tracing::info!(extraction_id = %job.extraction_id, "Extraction completed");
+                        Ok(())
+                    }
+                    Err(error) => {
+                        let decision = step(
+                            snapshot,
+                            event_for_error(&error),
+                            runtime.policy,
+                            rand_jitter(),
+                        );
+                        apply_failure_decision(runtime, &job, decision.action, error.message())
+                            .await
+                    }
                 }
             }
         }
