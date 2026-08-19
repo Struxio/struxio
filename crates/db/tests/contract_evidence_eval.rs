@@ -259,8 +259,7 @@ async fn postgres_rejects_content_hash_that_does_not_match_payload() {
 #[tokio::test]
 async fn contract_identity_is_workspace_local() {
     let pool = connect().await;
-    let other =
-        WorkspaceId::new(Uuid::from_u128(0xaaa1_bbb2_4cc3_8dd4_eee5_fff6_0007_1118)).unwrap();
+    let other = WorkspaceId::new(Uuid::new_v4()).unwrap();
     insert_workspace(
         &pool,
         other.as_uuid(),
@@ -435,8 +434,7 @@ async fn json_pointer_format_is_enforced() {
 #[tokio::test]
 async fn evidence_attachment_rejects_cross_workspace_extraction() {
     let pool = connect().await;
-    let other =
-        WorkspaceId::new(Uuid::from_u128(0x2222_3333_4444_8555_1666_7777_8888_9999)).unwrap();
+    let other = WorkspaceId::new(Uuid::new_v4()).unwrap();
     insert_workspace(
         &pool,
         other.as_uuid(),
@@ -559,8 +557,7 @@ async fn evaluation_run_persists_fixture_outcomes_and_metrics() {
 #[tokio::test]
 async fn eval_runs_are_isolated_by_workspace() {
     let pool = connect().await;
-    let other =
-        WorkspaceId::new(Uuid::from_u128(0x3456_789a_4bcd_8ef0_1234_5678_9abc_def0)).unwrap();
+    let other = WorkspaceId::new(Uuid::new_v4()).unwrap();
     insert_workspace(
         &pool,
         other.as_uuid(),
