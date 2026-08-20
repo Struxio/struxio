@@ -17,10 +17,7 @@ mod tools;
 pub use backend::{McpBackend, ServiceAdapter};
 pub use dispatch::dispatch_tool;
 pub use error::{McpError, McpResult};
-pub use limits::{
-    MAX_BATCH_DOCUMENTS, MAX_DECODED_INLINE_BYTES, MAX_FILE_NAME_BYTES, MAX_FILE_TYPE_BYTES,
-    MAX_MESSAGE_BYTES,
-};
+pub use limits::{MAX_FILE_NAME_BYTES, MAX_FILE_TYPE_BYTES, MAX_MESSAGE_BYTES};
 pub use protocol::{
     parse_inbound, Inbound, PREFERRED_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS,
 };

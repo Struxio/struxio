@@ -10,6 +10,8 @@ pub enum AppError {
     Forbidden(String),
     #[error("Validation error: {0}")]
     Validation(String),
+    #[error("Input too large: {0}")]
+    InputTooLarge(String),
     #[error("Not found: {0}")]
     NotFound(String),
     #[error("External service error: {0}")]
