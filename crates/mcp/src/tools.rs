@@ -4,9 +4,9 @@ use std::collections::HashSet;
 
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
-use struxio_core::services::{
-    batch_service::MAX_BATCH_DOCUMENTS, extraction_service::MAX_DECODED_INLINE_BYTES,
-};
+use struxio_core::services::batch_service::MAX_BATCH_DOCUMENTS;
+#[cfg(test)]
+use struxio_core::services::extraction_service::MAX_DECODED_INLINE_BYTES;
 use uuid::Uuid;
 
 use crate::error::{McpError, McpResult};
