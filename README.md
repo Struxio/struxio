@@ -115,7 +115,20 @@ curl -X POST http://localhost:8080/v1/templates \
     },
     "prompt_template": "Extract the invoice total, vendor name, and date."
   }'
+
+# Extract directly from a local file
+curl -X POST http://localhost:8080/v1/extractions/inline \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"file_name\": \"invoice.pdf\",
+    \"file_type\": \"application/pdf\",
+    \"file_base64\": \"$(base64 < invoice.pdf | tr -d '\n')\",
+    \"template_id\": \"<template-id-from-the-response-above>\"
+  }"
 ```
+
+Batch processing requires a running worker. Start one with `cargo run -p struxio-worker`.
 
 ## API Reference
 
