@@ -51,6 +51,10 @@ impl IntoResponse for ApiError {
                 StatusCode::BAD_REQUEST,
                 axum::Json(serde_json::json!({ "error": self.0.to_string() })),
             ),
+            AppError::InputTooLarge(_) => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                axum::Json(serde_json::json!({ "error": self.0.to_string() })),
+            ),
             AppError::RateLimit(_) => (
                 StatusCode::TOO_MANY_REQUESTS,
                 axum::Json(serde_json::json!({ "error": self.0.to_string() })),
@@ -68,5 +72,20 @@ impl IntoResponse for ApiError {
             }
         };
         (status, body).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_service_input_returns_payload_too_large() {
+        let response = ApiError(AppError::InputTooLarge(
+            "decoded input exceeds limit".into(),
+        ))
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

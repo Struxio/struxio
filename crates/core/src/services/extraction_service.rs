@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD, Engine};
 use sqlx::PgPool;
 use std::time::Duration;
 use struxio_common::models::{
@@ -12,6 +13,8 @@ use uuid::Uuid;
 use crate::provider::{ExtractionOutput, ExtractionRequest, SharedExtractionProvider};
 use crate::queue::QueueProducer;
 use crate::storage::StorageClient;
+
+pub const MAX_DECODED_INLINE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct ExtractionService<Q: QueueProducer> {
@@ -178,15 +181,10 @@ impl<Q: QueueProducer> ExtractionService<Q> {
         request: &InlineExtractionRequest,
         model_id: &str,
     ) -> Result<Extraction, AppError> {
-        use base64::{engine::general_purpose::STANDARD, Engine};
-
         let mime_type = normalize_mime_type(&request.file_type)
             .map_err(|e| AppError::Validation(e.to_string()))?;
 
-        // 1. Decode base64
-        let file_bytes = STANDARD
-            .decode(&request.file_base64)
-            .map_err(|e| AppError::Validation(format!("Invalid base64: {e}")))?;
+        let file_bytes = decode_inline_file(&request.file_base64)?;
 
         let md5_hash = format!("{:x}", md5::compute(&file_bytes));
 
@@ -297,6 +295,52 @@ impl<Q: QueueProducer> ExtractionService<Q> {
                     }
                 }
             }
+        }
+    }
+}
+
+fn decode_inline_file(file_base64: &str) -> Result<Vec<u8>, AppError> {
+    let file_bytes = STANDARD
+        .decode(file_base64)
+        .map_err(|_| AppError::Validation("file_base64 must be standard base64".to_string()))?;
+    if file_bytes.is_empty() {
+        return Err(AppError::Validation(
+            "file_base64 must contain at least one byte".to_string(),
+        ));
+    }
+    if file_bytes.len() > MAX_DECODED_INLINE_BYTES {
+        return Err(AppError::InputTooLarge(format!(
+            "decoded inline input exceeds {MAX_DECODED_INLINE_BYTES} bytes"
+        )));
+    }
+    Ok(file_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inline_file_accepts_exactly_eight_mib_decoded() {
+        let encoded = STANDARD.encode(vec![0_u8; MAX_DECODED_INLINE_BYTES]);
+
+        let decoded = decode_inline_file(&encoded).expect("8 MiB should be accepted");
+
+        assert_eq!(decoded.len(), MAX_DECODED_INLINE_BYTES);
+    }
+
+    #[test]
+    fn inline_file_rejects_eight_mib_plus_one_byte_decoded() {
+        let encoded = STANDARD.encode(vec![0_u8; MAX_DECODED_INLINE_BYTES + 1]);
+
+        let error = decode_inline_file(&encoded).expect_err("8 MiB + 1 byte should be rejected");
+
+        match error {
+            AppError::InputTooLarge(message) => assert_eq!(
+                message,
+                format!("decoded inline input exceeds {MAX_DECODED_INLINE_BYTES} bytes")
+            ),
+            other => panic!("expected input-too-large error, got {other:?}"),
         }
     }
 }

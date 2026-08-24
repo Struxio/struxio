@@ -47,6 +47,7 @@ impl McpError {
             AppError::Auth(_) => Self::new("unauthorized", "authentication failed"),
             AppError::Forbidden(_) => Self::new("forbidden", "insufficient scope"),
             AppError::Validation(message) => Self::invalid_arguments(message),
+            AppError::InputTooLarge(message) => Self::input_too_large(message),
             AppError::NotFound(_) => Self::new("not_found", "resource not found"),
             AppError::RateLimit(_) => Self::new("rate_limited", "request rate limit exceeded"),
             AppError::Duplicate(_) => Self::new("conflict", "resource already exists"),
@@ -105,5 +106,11 @@ mod tests {
         assert_eq!(forbidden.code(), "forbidden");
         assert_eq!(forbidden.message(), "insufficient scope");
         assert!(!forbidden.message().contains("79ca2631"));
+
+        let too_large = McpError::from_app(AppError::InputTooLarge(
+            "decoded input exceeds limit".into(),
+        ));
+        assert_eq!(too_large.code(), "input_too_large");
+        assert_eq!(too_large.message(), "decoded input exceeds limit");
     }
 }

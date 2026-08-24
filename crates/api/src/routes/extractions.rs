@@ -1,14 +1,17 @@
 use axum::{
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     routing::{get, post},
     Json, Router,
 };
 use struxio_common::models::{CreateExtractionRequest, Extraction, InlineExtractionRequest};
 use struxio_common::{PrincipalContext, Scope};
+use struxio_core::services::extraction_service::MAX_DECODED_INLINE_BYTES;
 
 use crate::errors::ApiError;
 use crate::middleware::auth_provider::require_scope;
 use crate::state::AppState;
+
+const MAX_INLINE_REQUEST_BYTES: usize = ((MAX_DECODED_INLINE_BYTES + 2) / 3) * 4 + 64 * 1024;
 
 pub async fn create_extraction(
     ctx: PrincipalContext,
@@ -82,6 +85,9 @@ pub async fn get_extraction(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_extractions).post(create_extraction))
-        .route("/inline", post(create_inline_extraction))
+        .route(
+            "/inline",
+            post(create_inline_extraction).layer(DefaultBodyLimit::max(MAX_INLINE_REQUEST_BYTES)),
+        )
         .route("/{id}", get(get_extraction))
 }

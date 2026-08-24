@@ -2,15 +2,15 @@
 
 use std::collections::HashSet;
 
-use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use struxio_core::services::batch_service::MAX_BATCH_DOCUMENTS;
+#[cfg(test)]
+use struxio_core::services::extraction_service::MAX_DECODED_INLINE_BYTES;
 use uuid::Uuid;
 
 use crate::error::{McpError, McpResult};
-use crate::limits::{
-    MAX_BATCH_DOCUMENTS, MAX_DECODED_INLINE_BYTES, MAX_FILE_NAME_BYTES, MAX_FILE_TYPE_BYTES,
-};
+use crate::limits::{MAX_FILE_NAME_BYTES, MAX_FILE_TYPE_BYTES};
 
 /// Compact MCP tool catalog for this adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,7 +193,7 @@ pub fn parse_extract(arguments: Value) -> McpResult<ExtractArgs> {
             let file_name = require_present(input.file_name, "file_name")?;
             let file_type = require_present(input.file_type, "file_type")?;
             let file_base64 = require_present(input.file_base64, "file_base64")?;
-            validate_inline_fields(&file_name, &file_type, &file_base64)?;
+            validate_inline_fields(&file_name, &file_type)?;
             Ok(ExtractArgs {
                 template_id: input.template_id,
                 source: ExtractSource::Inline {
@@ -218,11 +218,6 @@ pub fn parse_batch(arguments: Value) -> McpResult<(Uuid, Vec<Uuid>)> {
             "document_ids must contain at least one UUID",
         ));
     }
-    if input.document_ids.len() > MAX_BATCH_DOCUMENTS {
-        return Err(McpError::input_too_large(format!(
-            "document_ids cannot contain more than {MAX_BATCH_DOCUMENTS} documents"
-        )));
-    }
     if input.document_ids.iter().any(Uuid::is_nil) {
         return Err(McpError::invalid_arguments(
             "document_ids must not contain the nil UUID",
@@ -237,7 +232,7 @@ pub fn parse_batch(arguments: Value) -> McpResult<(Uuid, Vec<Uuid>)> {
     Ok((input.template_id, input.document_ids))
 }
 
-fn validate_inline_fields(file_name: &str, file_type: &str, file_base64: &str) -> McpResult<()> {
+fn validate_inline_fields(file_name: &str, file_type: &str) -> McpResult<()> {
     if file_name.is_empty() || file_name.len() > MAX_FILE_NAME_BYTES {
         return Err(McpError::invalid_arguments(format!(
             "file_name must be between 1 and {MAX_FILE_NAME_BYTES} bytes"
@@ -246,19 +241,6 @@ fn validate_inline_fields(file_name: &str, file_type: &str, file_base64: &str) -
     if file_type.is_empty() || file_type.len() > MAX_FILE_TYPE_BYTES {
         return Err(McpError::invalid_arguments(format!(
             "file_type must be between 1 and {MAX_FILE_TYPE_BYTES} bytes"
-        )));
-    }
-    let decoded = STANDARD
-        .decode(file_base64)
-        .map_err(|_| McpError::invalid_arguments("file_base64 must be standard base64"))?;
-    if decoded.is_empty() {
-        return Err(McpError::invalid_arguments(
-            "file_base64 must contain at least one byte",
-        ));
-    }
-    if decoded.len() > MAX_DECODED_INLINE_BYTES {
-        return Err(McpError::input_too_large(format!(
-            "decoded inline input exceeds {MAX_DECODED_INLINE_BYTES} bytes"
         )));
     }
     Ok(())
@@ -358,7 +340,7 @@ fn batch_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine;
+    use base64::{engine::general_purpose::STANDARD, Engine};
 
     #[test]
     fn catalog_exposes_the_compact_rfc_aligned_surface() {
@@ -449,15 +431,16 @@ mod tests {
     }
 
     #[test]
-    fn inline_size_limit_is_enforced_on_decoded_bytes() {
-        let err = parse_extract(json!({
+    fn inline_size_limit_is_delegated_to_the_service() {
+        let args = parse_extract(json!({
             "template_id": Uuid::from_u128(1),
             "file_name": "huge.bin",
             "file_type": "pdf",
             "file_base64": STANDARD.encode(vec![0_u8; MAX_DECODED_INLINE_BYTES + 1]),
         }))
-        .unwrap_err();
-        assert_eq!(err.code(), "input_too_large");
+        .expect("the service owns the decoded size limit");
+
+        assert!(matches!(args.source, ExtractSource::Inline { .. }));
     }
 
     #[test]
@@ -479,13 +462,15 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code(), "invalid_arguments");
 
-        let too_many = vec![Uuid::from_u128(1); MAX_BATCH_DOCUMENTS + 1];
-        let err = parse_batch(json!({
+        let too_many: Vec<_> = (1..=MAX_BATCH_DOCUMENTS + 1)
+            .map(|value| Uuid::from_u128(value as u128))
+            .collect();
+        let (_, document_ids) = parse_batch(json!({
             "template_id": Uuid::from_u128(1),
             "document_ids": too_many,
         }))
-        .unwrap_err();
-        assert_eq!(err.code(), "input_too_large");
+        .expect("the service owns the batch size limit");
+        assert_eq!(document_ids.len(), MAX_BATCH_DOCUMENTS + 1);
     }
 
     #[test]
