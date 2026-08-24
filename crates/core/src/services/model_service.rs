@@ -14,7 +14,10 @@ pub struct ModelService {
 
 impl ModelService {
     pub fn new(db: PgPool, default_model_id: String) -> Self {
-        Self { db, default_model_id }
+        Self {
+            db,
+            default_model_id,
+        }
     }
 
     pub async fn get_default_model(&self) -> Result<AiModel, AppError> {

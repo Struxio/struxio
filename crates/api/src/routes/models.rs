@@ -1,12 +1,13 @@
 use axum::{extract::State, routing::get, Json, Router};
 use struxio_common::models::AiModel;
 
+use struxio_common::PrincipalContext;
+
 use crate::errors::ApiError;
-use crate::middleware::auth_provider::AuthUser;
 use crate::state::AppState;
 
 pub async fn get_default_model(
-    _auth: AuthUser,
+    _ctx: PrincipalContext,
     State(state): State<AppState>,
 ) -> Result<Json<AiModel>, ApiError> {
     let model = state

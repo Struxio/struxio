@@ -5,6 +5,8 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85"
+license = "AGPL-3.0-only"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -34,14 +36,18 @@ tower-http = { version = "0.6", features = [
     "request-id",
     "util",
 ] }
-aws-sdk-s3 = "1"
-aws-credential-types = { version = "1", features = ["hardcoded-credentials"] }
+# Latest S3 SDK line compatible with the Rust 1.85 MSRV.
+aws-sdk-s3 = "=1.96.0"
+aws-credential-types = { version = "=1.2.3", features = ["hardcoded-credentials"] }
 md5 = "0.7"
 dotenvy = "0.15"
 sha2 = "0.10"
+jsonschema = { version = "0.46.10", default-features = false }
+regex = "1"
 rand = "0.8"
 base64 = "0.22"
 async-trait = "0.1"
 struxio-common = { path = "crates/common" }
+struxio-contracts = { path = "crates/contracts" }
 struxio-db = { path = "crates/db" }
 struxio-core = { path = "crates/core" }

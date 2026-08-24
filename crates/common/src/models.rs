@@ -3,11 +3,14 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use uuid::Uuid;
 
+use crate::principal::WorkspaceId;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtractionStatus {
     Pending,
     Processing,
+    Retrying,
     Completed,
     Failed,
 }
@@ -17,13 +20,14 @@ impl Display for ExtractionStatus {
         match self {
             ExtractionStatus::Pending => write!(f, "pending"),
             ExtractionStatus::Processing => write!(f, "processing"),
+            ExtractionStatus::Retrying => write!(f, "retrying"),
             ExtractionStatus::Completed => write!(f, "completed"),
             ExtractionStatus::Failed => write!(f, "failed"),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BatchStatus {
     Pending,
@@ -45,9 +49,57 @@ impl Display for BatchStatus {
     }
 }
 
+/// Child extraction counts used to derive an honest batch terminal state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ChildCounts {
+    pub pending: i32,
+    pub processing: i32,
+    pub retrying: i32,
+    pub completed: i32,
+    pub failed: i32,
+}
+
+impl ChildCounts {
+    pub fn open(self) -> i32 {
+        self.pending + self.processing + self.retrying
+    }
+
+    pub fn batch_status(self) -> BatchStatus {
+        if self.open() > 0 {
+            if self.completed == 0 && self.failed == 0 && self.processing == 0 && self.retrying == 0
+            {
+                BatchStatus::Pending
+            } else {
+                BatchStatus::Processing
+            }
+        } else if self.failed == 0 {
+            BatchStatus::Completed
+        } else if self.completed == 0 {
+            BatchStatus::Failed
+        } else {
+            BatchStatus::PartiallyCompleted
+        }
+    }
+
+    pub fn as_status_str(self) -> &'static str {
+        match self.batch_status() {
+            BatchStatus::Pending => "pending",
+            BatchStatus::Processing => "processing",
+            BatchStatus::Completed => "completed",
+            BatchStatus::PartiallyCompleted => "partially_completed",
+            BatchStatus::Failed => "failed",
+        }
+    }
+
+    pub fn is_terminal(self) -> bool {
+        self.open() == 0
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     pub id: Uuid,
+    pub workspace_id: WorkspaceId,
     pub md5_hash: String,
     pub file_name: String,
     pub file_type: String,
@@ -60,6 +112,7 @@ pub struct Document {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractionTemplate {
     pub id: Uuid,
+    pub workspace_id: WorkspaceId,
     pub name: String,
     pub description: Option<String>,
     pub json_schema: serde_json::Value,
@@ -71,6 +124,7 @@ pub struct ExtractionTemplate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Extraction {
     pub id: Uuid,
+    pub workspace_id: WorkspaceId,
     pub document_id: Uuid,
     pub template_id: Uuid,
     pub batch_job_id: Option<Uuid>,
@@ -82,6 +136,7 @@ pub struct Extraction {
     pub input_tokens: i32,
     pub output_tokens: i32,
     pub processing_time_ms: Option<i32>,
+    pub attempt: i32,
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
 }
@@ -89,6 +144,7 @@ pub struct Extraction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchJob {
     pub id: Uuid,
+    pub workspace_id: WorkspaceId,
     pub template_id: Uuid,
     pub status: String,
     pub total_documents: i32,

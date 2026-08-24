@@ -1,12 +1,11 @@
-use struxio_common::AppError;
+use struxio_common::{AppError, PrincipalContext, Scope};
 
-/// Represents an authenticated caller on a self-hosted Struxio instance.
-/// OSS auth is presence-only: you are either authenticated or not.
-/// There are no roles, orgs, or user identity concepts in the OSS API.
-#[derive(Debug, Clone)]
-pub struct AuthUser;
+/// OSS and cloud both inject a real [`PrincipalContext`]. Presence-only auth
+/// is no longer representable: a caller always has a non-nil workspace.
+pub type AuthUser = PrincipalContext;
 
-// Kept for potential future use but not enforced in OSS routes.
-pub fn _require_role(_user: &AuthUser, _minimum_role: &str) -> Result<(), AppError> {
-    Ok(())
+/// Require `scope` on the authenticated principal. Failures are authorization
+/// errors and do not mention whether a resource exists.
+pub fn require_scope(user: &PrincipalContext, scope: Scope) -> Result<(), AppError> {
+    user.require_scope(scope)
 }

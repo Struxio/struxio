@@ -1,6 +1,8 @@
 # Contributing to Struxio
 
-Thank you for your interest in contributing! Struxio is an open-core project — the core extraction engine and API are fully open source under AGPL-3.0.
+Thank you for your interest in contributing! Struxio is an open-core project — the core extraction engine and API are fully open source under AGPL-3.0-only.
+
+External contributions containing code, documentation, tests, migrations, or other copyrightable material are currently paused while the project selects a dual-licensing CLA process. Please do not submit pull requests or patches. Issues, feature requests, documentation suggestions, and bug reports remain welcome.
 
 ## What Belongs Here
 
@@ -49,13 +51,14 @@ cargo test       # run the test suite
 ```
 crates/
 ├── api/       — Axum HTTP server, routes, middleware
+├── mcp/       — stdio MCP adapter (JSON-RPC over services)
 ├── core/      — Business logic and service layer
 ├── db/        — SQLx repositories (no business logic)
 ├── common/    — Shared types (models, config, errors)
 └── worker/    — Background job processor
 ```
 
-**Key principle:** Business logic lives in `core/`, never in `api/` or `db/`. Routes call services. Services call repositories.
+**Key principle:** Business logic lives in `core/`, never in `api/`, `mcp/`, or `db/`. Routes and MCP tools call services. Services call repositories. The MCP crate must not perform unscoped repository access.
 
 ## Coding Standards
 
@@ -88,10 +91,10 @@ Write forward-only migrations. We do not use down migrations.
 
 All shared models live in `crates/common/src/models.rs`. Keep them lean — no business logic, just data.
 
-## Pull Request Process
+## Pull Request Process (currently paused)
 
 1. Open an issue first to discuss significant changes
-2. Branch from `main` with a descriptive name: `feat/batch-webhook`, `fix/rate-limit-edge-case`
+2. When external code contributions reopen, branch from `main` with a descriptive name: `feat/batch-webhook`, `fix/rate-limit-edge-case`
 3. Keep PRs focused — one concern per PR
 4. Ensure `cargo check`, `cargo clippy`, and `cargo test` all pass
 5. Update relevant docs/`README.md` if the change affects the public API or setup steps
@@ -116,4 +119,4 @@ Found a vulnerability? **Do not open a public issue.** Email security@struxio.co
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under [AGPL-3.0](./LICENSE).
+External contributions containing copyrightable material remain paused while the project selects a dual-licensing CLA process. A future CLA, once selected and published, must grant the project the rights needed to offer accepted contributions under both [AGPL-3.0-only](./LICENSE) and separate commercial terms. No CLA, DCO, or contributor assignment is being requested by this notice.

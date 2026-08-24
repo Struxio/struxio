@@ -1,5 +1,12 @@
 pub mod ai_models;
 pub mod batch_jobs;
+pub mod contracts;
 pub mod documents;
+pub mod evaluations;
+pub mod evidence;
 pub mod extractions;
+pub mod outbox;
 pub mod templates;
+pub mod workspaces;
+
+pub(crate) use workspaces::workspace_id_of;

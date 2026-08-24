@@ -1,6 +1,20 @@
+use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use struxio_common::mime::normalize_mime_type;
+use struxio_contracts::BackendDescriptor;
+
+use crate::provider::{
+    structured_document_capabilities, ExtractionOutput, ExtractionProvider, ExtractionRequest,
+    ExtractionUsage, ProviderError,
+};
+
+/// Opaque provider id advertised by the Gemini adapter.
+pub const GEMINI_PROVIDER_ID: &str = "gemini";
+const GEMINI_API_KEY_HEADER: &str = "x-goog-api-key";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeminiResponse {
     pub result: serde_json::Value,
@@ -12,10 +26,40 @@ pub struct GeminiResponse {
 pub enum GeminiError {
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
-    #[error("API error: {0}")]
-    Api(String),
+    #[error("API error {status}: {body}")]
+    Api { status: u16, body: String },
     #[error("Parse error: {0}")]
     Parse(String),
+}
+
+impl From<GeminiError> for ProviderError {
+    fn from(error: GeminiError) -> Self {
+        match error {
+            GeminiError::Http(inner) if inner.is_timeout() => ProviderError::Timeout,
+            GeminiError::Http(inner) if inner.is_connect() => {
+                ProviderError::Transient(inner.to_string())
+            }
+            GeminiError::Http(inner) => ProviderError::Backend(inner.to_string()),
+            GeminiError::Api { status, body } if crate::jobs::retryable_http_status(status) => {
+                ProviderError::Transient(format!("Gemini API error {status}: {body}"))
+            }
+            GeminiError::Api { status, body } => {
+                ProviderError::Backend(format!("Gemini API error {status}: {body}"))
+            }
+            GeminiError::Parse(message) => ProviderError::StructuredOutput(message),
+        }
+    }
+}
+
+impl GeminiError {
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Http(err) => err.is_timeout() || err.is_connect(),
+            Self::Api { status, .. } => crate::jobs::retryable_http_status(*status),
+            // Empty candidates / malformed model JSON are often transient.
+            Self::Parse(_) => true,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -23,6 +67,8 @@ pub struct GeminiClient {
     api_key: String,
     model: String,
     client: reqwest::Client,
+    request_timeout: Duration,
+    identity: BackendDescriptor,
 }
 
 #[derive(Serialize)]
@@ -87,63 +133,103 @@ struct UsageMetadata {
     candidates_token_count: Option<i32>,
 }
 
+fn build_generate_request(
+    file_bytes: &[u8],
+    mime_type: &str,
+    instructions: &str,
+    json_schema: &serde_json::Value,
+) -> GeminiRequest {
+    GeminiRequest {
+        contents: vec![Content {
+            parts: vec![
+                Part::Text {
+                    text: instructions.to_string(),
+                },
+                Part::InlineData {
+                    inline_data: InlineData {
+                        mime_type: mime_type.to_string(),
+                        data: BASE64.encode(file_bytes),
+                    },
+                },
+            ],
+        }],
+        generation_config: GenerationConfig {
+            response_mime_type: "application/json".to_string(),
+            response_schema: json_schema.clone(),
+        },
+    }
+}
+
+fn build_http_request(
+    client: &reqwest::Client,
+    model: &str,
+    api_key: &str,
+    payload: &GeminiRequest,
+) -> Result<reqwest::Request, reqwest::Error> {
+    let url =
+        format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
+    let mut request = client
+        .post(url)
+        .header(GEMINI_API_KEY_HEADER, api_key)
+        .json(payload)
+        .build()?;
+    if let Some(value) = request.headers_mut().get_mut(GEMINI_API_KEY_HEADER) {
+        value.set_sensitive(true);
+    }
+    Ok(request)
+}
+
+fn redact_secret(value: String, secret: &str) -> String {
+    if secret.is_empty() {
+        value
+    } else {
+        value.replace(secret, "[REDACTED]")
+    }
+}
+
 impl GeminiClient {
-    pub fn new(api_key: String, model: String) -> Self {
-        Self {
+    pub fn new(
+        api_key: String,
+        model: String,
+        request_timeout: Duration,
+    ) -> Result<Self, reqwest::Error> {
+        let client = reqwest::Client::builder()
+            .timeout(request_timeout)
+            .build()?;
+        let identity = BackendDescriptor::new(
+            GEMINI_PROVIDER_ID,
+            model.clone(),
+            structured_document_capabilities(),
+        );
+
+        Ok(Self {
             api_key,
             model,
-            client: reqwest::Client::new(),
-        }
+            client,
+            request_timeout,
+            identity,
+        })
     }
 
-    pub async fn extract(
+    pub fn request_timeout(&self) -> Duration {
+        self.request_timeout
+    }
+
+    async fn generate_content(
         &self,
         file_bytes: &[u8],
         mime_type: &str,
         prompt_template: &str,
         json_schema: &serde_json::Value,
     ) -> Result<GeminiResponse, GeminiError> {
-        let base64_data = BASE64.encode(file_bytes);
-
-        let request = GeminiRequest {
-            contents: vec![Content {
-                parts: vec![
-                    Part::Text {
-                        text: prompt_template.to_string(),
-                    },
-                    Part::InlineData {
-                        inline_data: InlineData {
-                            mime_type: mime_type.to_string(),
-                            data: base64_data,
-                        },
-                    },
-                ],
-            }],
-            generation_config: GenerationConfig {
-                response_mime_type: "application/json".to_string(),
-                response_schema: json_schema.clone(),
-            },
-        };
-
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            self.model, self.api_key
-        );
-
-        let resp = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?;
+        let payload = build_generate_request(file_bytes, mime_type, prompt_template, json_schema);
+        let request = build_http_request(&self.client, &self.model, &self.api_key, &payload)?;
+        let resp = self.client.execute(request).await?;
 
         if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(GeminiError::Api(format!(
-                "Gemini API returned {}: {}",
-                status, body
-            )));
+            let status = resp.status().as_u16();
+            let body = redact_secret(resp.text().await.unwrap_or_default(), &self.api_key);
+            return Err(GeminiError::Api { status, body });
         }
 
         let api_response: GeminiApiResponse = resp
@@ -179,5 +265,151 @@ impl GeminiClient {
             input_tokens,
             output_tokens,
         })
+    }
+}
+
+#[async_trait]
+impl ExtractionProvider for GeminiClient {
+    fn identity(&self) -> &BackendDescriptor {
+        &self.identity
+    }
+
+    async fn extract(
+        &self,
+        request: ExtractionRequest<'_>,
+    ) -> Result<ExtractionOutput, ProviderError> {
+        let mime_type = normalize_mime_type(request.mime_type)
+            .map_err(|error| ProviderError::UnsupportedMediaType(error.to_string()))?;
+
+        let response = self
+            .generate_content(
+                request.bytes,
+                mime_type,
+                request.instructions,
+                request.json_schema,
+            )
+            .await?;
+
+        Ok(ExtractionOutput {
+            result: response.result,
+            usage: ExtractionUsage {
+                input_tokens: response.input_tokens,
+                output_tokens: response.output_tokens,
+            },
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_generate_request, build_http_request, redact_secret, GeminiClient,
+        GEMINI_API_KEY_HEADER, GEMINI_PROVIDER_ID,
+    };
+    use crate::provider::ExtractionProvider;
+    use std::time::Duration;
+
+    #[test]
+    fn builds_client_with_configured_request_timeout() {
+        let timeout = Duration::from_secs(45);
+        let client = GeminiClient::new(
+            "test-key".to_string(),
+            "gemini-2.5-flash".to_string(),
+            timeout,
+        )
+        .expect("test client should build");
+
+        assert_eq!(client.request_timeout(), timeout);
+        assert_eq!(client.identity().provider_id(), GEMINI_PROVIDER_ID);
+        assert_eq!(client.identity().backend_id(), "gemini-2.5-flash");
+    }
+
+    #[test]
+    fn generate_request_asks_for_structured_json() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "invoice_number": { "type": "string" } }
+        });
+        let request = build_generate_request(
+            b"%PDF-1.4",
+            "application/pdf",
+            "Extract the invoice number.",
+            &schema,
+        );
+        let json = serde_json::to_value(request).expect("serialize gemini request");
+
+        assert_eq!(
+            json["generationConfig"]["responseMimeType"],
+            "application/json"
+        );
+        assert_eq!(json["generationConfig"]["responseSchema"], schema);
+        assert_eq!(
+            json["contents"][0]["parts"][1]["inline_data"]["mimeType"],
+            "application/pdf"
+        );
+        assert_eq!(
+            json["contents"][0]["parts"][0]["text"],
+            "Extract the invoice number."
+        );
+    }
+
+    #[test]
+    fn api_key_is_only_sent_in_a_sensitive_header() {
+        let secret = "super-secret-api-key";
+        let payload = build_generate_request(
+            b"%PDF-1.4",
+            "application/pdf",
+            "Extract.",
+            &serde_json::json!({"type": "object"}),
+        );
+        let request = build_http_request(
+            &reqwest::Client::new(),
+            "gemini-2.5-flash",
+            secret,
+            &payload,
+        )
+        .expect("request should build");
+
+        assert!(request.url().query().is_none());
+        let header = request
+            .headers()
+            .get(GEMINI_API_KEY_HEADER)
+            .expect("API key header");
+        assert_eq!(header.to_str().unwrap(), secret);
+        assert!(header.is_sensitive());
+        assert!(!format!("{request:?}").contains(secret));
+    }
+
+    #[test]
+    fn api_error_body_redacts_the_key() {
+        assert_eq!(
+            redact_secret(
+                "upstream echoed super-secret-api-key".to_string(),
+                "super-secret-api-key"
+            ),
+            "upstream echoed [REDACTED]"
+        );
+    }
+
+    #[test]
+    fn classifies_retryable_provider_failures() {
+        use super::GeminiError;
+
+        assert!(GeminiError::Api {
+            status: 429,
+            body: "rate limited".into(),
+        }
+        .is_retryable());
+        assert!(GeminiError::Api {
+            status: 503,
+            body: "unavailable".into(),
+        }
+        .is_retryable());
+        assert!(!GeminiError::Api {
+            status: 400,
+            body: "bad request".into(),
+        }
+        .is_retryable());
+        assert!(GeminiError::Parse("empty candidates".into()).is_retryable());
     }
 }

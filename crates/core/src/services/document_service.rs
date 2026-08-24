@@ -1,7 +1,9 @@
-use struxio_common::models::{CheckDocumentRequest, CheckDocumentResponse, ConfirmUploadRequest, Document};
-use struxio_common::AppError;
-use struxio_db::repositories::documents::DocumentRepo;
 use sqlx::PgPool;
+use struxio_common::models::{
+    CheckDocumentRequest, CheckDocumentResponse, ConfirmUploadRequest, Document,
+};
+use struxio_common::{mime::normalize_mime_type, AppError, PrincipalContext, WorkspaceId};
+use struxio_db::repositories::documents::DocumentRepo;
 use uuid::Uuid;
 
 use crate::storage::StorageClient;
@@ -19,11 +21,16 @@ impl DocumentService {
 
     pub async fn check_document(
         &self,
+        ctx: &PrincipalContext,
         request: &CheckDocumentRequest,
     ) -> Result<CheckDocumentResponse, AppError> {
-        if let Some(doc) = DocumentRepo::find_by_hash(&self.db, &request.md5_hash)
-            .await
-            .map_err(|e| AppError::Database(e.to_string()))?
+        let mime_type = normalize_mime_type(&request.file_type)
+            .map_err(|e| AppError::Validation(e.to_string()))?;
+
+        if let Some(doc) =
+            DocumentRepo::find_by_hash(&self.db, ctx.workspace_id(), &request.md5_hash)
+                .await
+                .map_err(|e| AppError::Database(e.to_string()))?
         {
             return Ok(CheckDocumentResponse {
                 exists: true,
@@ -33,10 +40,15 @@ impl DocumentService {
             });
         }
 
-        let s3_key = format!("{}/{}", Uuid::new_v4(), request.file_name);
+        let s3_key = format!(
+            "{}/{}/{}",
+            ctx.workspace_id().as_uuid(),
+            Uuid::new_v4(),
+            request.file_name
+        );
         let upload_url = self
             .storage
-            .generate_presigned_upload_url(&s3_key, &request.file_type, 3600)
+            .generate_presigned_upload_url(&s3_key, mime_type, 3600)
             .await
             .map_err(|e| AppError::ExternalService(e.to_string()))?;
 
@@ -50,13 +62,19 @@ impl DocumentService {
 
     pub async fn confirm_upload(
         &self,
+        ctx: &PrincipalContext,
         request: &ConfirmUploadRequest,
     ) -> Result<Document, AppError> {
+        let mime_type = normalize_mime_type(&request.file_type)
+            .map_err(|e| AppError::Validation(e.to_string()))?;
+        validate_workspace_s3_key(ctx.workspace_id(), &request.s3_key)?;
+
         DocumentRepo::create(
             &self.db,
+            ctx.workspace_id(),
             &request.md5_hash,
             &request.file_name,
-            &request.file_type,
+            mime_type,
             &request.s3_key,
             request.size_bytes,
             1,
@@ -65,21 +83,25 @@ impl DocumentService {
         .map_err(|e| AppError::Database(e.to_string()))
     }
 
-    pub async fn list(&self) -> Result<Vec<Document>, AppError> {
-        DocumentRepo::list_all(&self.db)
+    pub async fn list(&self, ctx: &PrincipalContext) -> Result<Vec<Document>, AppError> {
+        DocumentRepo::list_all(&self.db, ctx.workspace_id())
             .await
             .map_err(|e| AppError::Database(e.to_string()))
     }
 
-    pub async fn get_by_id(&self, document_id: Uuid) -> Result<Document, AppError> {
-        DocumentRepo::find_by_id(&self.db, document_id)
+    pub async fn get_by_id(
+        &self,
+        ctx: &PrincipalContext,
+        document_id: Uuid,
+    ) -> Result<Document, AppError> {
+        DocumentRepo::find_by_id(&self.db, ctx.workspace_id(), document_id)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Document not found".to_string()))
     }
 
-    pub async fn delete(&self, document_id: Uuid) -> Result<(), AppError> {
-        let s3_key = DocumentRepo::delete_by_id(&self.db, document_id)
+    pub async fn delete(&self, ctx: &PrincipalContext, document_id: Uuid) -> Result<(), AppError> {
+        let s3_key = DocumentRepo::delete_by_id(&self.db, ctx.workspace_id(), document_id)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Document not found".to_string()))?;
@@ -89,5 +111,34 @@ impl DocumentService {
         }
 
         Ok(())
+    }
+}
+
+fn validate_workspace_s3_key(workspace_id: WorkspaceId, s3_key: &str) -> Result<(), AppError> {
+    let prefix = format!("{}/", workspace_id.as_uuid());
+    if s3_key.len() <= prefix.len() || !s3_key.starts_with(&prefix) {
+        return Err(AppError::Validation(
+            "s3_key does not belong to the authenticated workspace".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_workspace_s3_key;
+    use struxio_common::WorkspaceId;
+    use uuid::Uuid;
+
+    #[test]
+    fn upload_key_must_belong_to_workspace() {
+        let owner = WorkspaceId::new(Uuid::new_v4()).unwrap();
+        let other = WorkspaceId::new(Uuid::new_v4()).unwrap();
+        let owned_key = format!("{}/upload/invoice.pdf", owner.as_uuid());
+        let foreign_key = format!("{}/upload/invoice.pdf", other.as_uuid());
+
+        assert!(validate_workspace_s3_key(owner, &owned_key).is_ok());
+        assert!(validate_workspace_s3_key(owner, &foreign_key).is_err());
+        assert!(validate_workspace_s3_key(owner, &format!("{}/", owner.as_uuid())).is_err());
     }
 }

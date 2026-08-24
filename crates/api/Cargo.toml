@@ -2,6 +2,8 @@
 name = "struxio-api"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "struxio-api"
@@ -33,3 +35,8 @@ sha2 = { workspace = true }
 anyhow = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 aws-credential-types = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+struxio-db = { workspace = true }
+sqlx = { workspace = true }
