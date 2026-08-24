@@ -13,6 +13,7 @@ use crate::provider::{
 
 /// Opaque provider id advertised by the Gemini adapter.
 pub const GEMINI_PROVIDER_ID: &str = "gemini";
+const GEMINI_API_KEY_HEADER: &str = "x-goog-api-key";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeminiResponse {
@@ -159,6 +160,33 @@ fn build_generate_request(
     }
 }
 
+fn build_http_request(
+    client: &reqwest::Client,
+    model: &str,
+    api_key: &str,
+    payload: &GeminiRequest,
+) -> Result<reqwest::Request, reqwest::Error> {
+    let url =
+        format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
+    let mut request = client
+        .post(url)
+        .header(GEMINI_API_KEY_HEADER, api_key)
+        .json(payload)
+        .build()?;
+    if let Some(value) = request.headers_mut().get_mut(GEMINI_API_KEY_HEADER) {
+        value.set_sensitive(true);
+    }
+    Ok(request)
+}
+
+fn redact_secret(value: String, secret: &str) -> String {
+    if secret.is_empty() {
+        value
+    } else {
+        value.replace(secret, "[REDACTED]")
+    }
+}
+
 impl GeminiClient {
     pub fn new(
         api_key: String,
@@ -194,18 +222,13 @@ impl GeminiClient {
         prompt_template: &str,
         json_schema: &serde_json::Value,
     ) -> Result<GeminiResponse, GeminiError> {
-        let request = build_generate_request(file_bytes, mime_type, prompt_template, json_schema);
-
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            self.model, self.api_key
-        );
-
-        let resp = self.client.post(&url).json(&request).send().await?;
+        let payload = build_generate_request(file_bytes, mime_type, prompt_template, json_schema);
+        let request = build_http_request(&self.client, &self.model, &self.api_key, &payload)?;
+        let resp = self.client.execute(request).await?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
+            let body = redact_secret(resp.text().await.unwrap_or_default(), &self.api_key);
             return Err(GeminiError::Api { status, body });
         }
 
@@ -279,7 +302,10 @@ impl ExtractionProvider for GeminiClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_generate_request, GeminiClient, GEMINI_PROVIDER_ID};
+    use super::{
+        build_generate_request, build_http_request, redact_secret, GeminiClient,
+        GEMINI_API_KEY_HEADER, GEMINI_PROVIDER_ID,
+    };
     use crate::provider::ExtractionProvider;
     use std::time::Duration;
 
@@ -324,6 +350,44 @@ mod tests {
         assert_eq!(
             json["contents"][0]["parts"][0]["text"],
             "Extract the invoice number."
+        );
+    }
+
+    #[test]
+    fn api_key_is_only_sent_in_a_sensitive_header() {
+        let secret = "super-secret-api-key";
+        let payload = build_generate_request(
+            b"%PDF-1.4",
+            "application/pdf",
+            "Extract.",
+            &serde_json::json!({"type": "object"}),
+        );
+        let request = build_http_request(
+            &reqwest::Client::new(),
+            "gemini-2.5-flash",
+            secret,
+            &payload,
+        )
+        .expect("request should build");
+
+        assert!(request.url().query().is_none());
+        let header = request
+            .headers()
+            .get(GEMINI_API_KEY_HEADER)
+            .expect("API key header");
+        assert_eq!(header.to_str().unwrap(), secret);
+        assert!(header.is_sensitive());
+        assert!(!format!("{request:?}").contains(secret));
+    }
+
+    #[test]
+    fn api_error_body_redacts_the_key() {
+        assert_eq!(
+            redact_secret(
+                "upstream echoed super-secret-api-key".to_string(),
+                "super-secret-api-key"
+            ),
+            "upstream echoed [REDACTED]"
         );
     }
 
