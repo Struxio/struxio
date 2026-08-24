@@ -81,6 +81,7 @@ async fn main() -> anyhow::Result<()> {
         model_id: config.gemini_model.clone(),
         concurrency: config.worker_concurrency,
         claim_idle: config.worker_claim_idle(),
+        lease_duration: config.processing_lease(),
     });
 
     tracing::info!(
@@ -144,6 +145,7 @@ struct WorkerRuntime {
     model_id: String,
     concurrency: usize,
     claim_idle: Duration,
+    lease_duration: Duration,
 }
 
 async fn fill_inbox(
@@ -182,11 +184,13 @@ async fn handle_job(runtime: &WorkerRuntime, job: ExtractionJob) -> anyhow::Resu
         "Processing extraction"
     );
 
+    let lease_token = uuid::Uuid::new_v4();
     match ExtractionRepo::claim_for_processing(
         &runtime.pool,
         job.workspace_id,
         job.extraction_id,
-        runtime.claim_idle,
+        lease_token,
+        runtime.lease_duration,
     )
     .await
     {
@@ -213,20 +217,23 @@ async fn handle_job(runtime: &WorkerRuntime, job: ExtractionJob) -> anyhow::Resu
                 status = %existing.status,
                 "Extraction already has a live processing lease"
             );
+            runtime.consumer.ack(&job.stream_id).await?;
             Ok(())
         }
         Ok(ClaimOutcome::Run(claimed)) => {
             let snapshot = snapshot_of(&claimed);
             if snapshot.attempt > runtime.policy.max_attempts {
-                finish_dead_letter(runtime, &job, snapshot, "attempts exhausted").await?;
+                finish_dead_letter(runtime, &job, lease_token, snapshot, "attempts exhausted")
+                    .await?;
                 Ok(())
             } else {
-                match process_extraction(&job, runtime).await {
+                match process_with_lease_heartbeat(&job, runtime, lease_token).await {
                     Ok(success) => {
-                        ExtractionRepo::apply_completed(
+                        let applied = ExtractionRepo::apply_completed_claimed(
                             &runtime.pool,
                             job.workspace_id,
                             job.extraction_id,
+                            lease_token,
                             &success.result,
                             success.input_tokens,
                             success.output_tokens,
@@ -234,8 +241,15 @@ async fn handle_job(runtime: &WorkerRuntime, job: ExtractionJob) -> anyhow::Resu
                             &runtime.model_id,
                         )
                         .await?;
-                        runtime.consumer.ack(&job.stream_id).await?;
-                        tracing::info!(extraction_id = %job.extraction_id, "Extraction completed");
+                        if applied.changed {
+                            runtime.consumer.ack(&job.stream_id).await?;
+                            tracing::info!(extraction_id = %job.extraction_id, "Extraction completed");
+                        } else {
+                            tracing::warn!(
+                                extraction_id = %job.extraction_id,
+                                "Stale worker completion was fenced by lease ownership"
+                            );
+                        }
                         Ok(())
                     }
                     Err(error) => {
@@ -245,8 +259,14 @@ async fn handle_job(runtime: &WorkerRuntime, job: ExtractionJob) -> anyhow::Resu
                             runtime.policy,
                             rand_jitter(),
                         );
-                        apply_failure_decision(runtime, &job, decision.action, error.message())
-                            .await
+                        apply_failure_decision(
+                            runtime,
+                            &job,
+                            lease_token,
+                            decision.action,
+                            error.message(),
+                        )
+                        .await
                     }
                 }
             }
@@ -260,6 +280,53 @@ struct ExtractionSuccess {
     input_tokens: i32,
     output_tokens: i32,
     processing_time_ms: i32,
+}
+
+async fn process_with_lease_heartbeat(
+    job: &ExtractionJob,
+    runtime: &WorkerRuntime,
+    lease_token: uuid::Uuid,
+) -> Result<ExtractionSuccess, JobError> {
+    let heartbeat_every = (runtime.lease_duration / 3).max(Duration::from_secs(1));
+    let mut heartbeat = tokio::time::interval_at(
+        tokio::time::Instant::now() + heartbeat_every,
+        heartbeat_every,
+    );
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let work = process_extraction(job, runtime);
+    tokio::pin!(work);
+
+    loop {
+        tokio::select! {
+            result = &mut work => return result,
+            _ = heartbeat.tick() => {
+                let renewed = ExtractionRepo::renew_processing_lease(
+                    &runtime.pool,
+                    job.workspace_id,
+                    job.extraction_id,
+                    lease_token,
+                    runtime.lease_duration,
+                )
+                .await
+                .map_err(|error| JobError::retryable(format!(
+                    "processing lease heartbeat failed: {error}"
+                )))?;
+                if !renewed {
+                    return Err(JobError::retryable("processing lease ownership lost"));
+                }
+                let touched = runtime
+                    .consumer
+                    .touch(&job.stream_id)
+                    .await
+                    .map_err(|error| JobError::retryable(format!(
+                        "queue heartbeat failed: {error}"
+                    )))?;
+                if !touched {
+                    return Err(JobError::retryable("queue delivery ownership lost"));
+                }
+            }
+        }
+    }
 }
 
 async fn process_extraction(
@@ -328,6 +395,7 @@ fn provider_job_error(error: ProviderError) -> JobError {
 async fn apply_failure_decision(
     runtime: &WorkerRuntime,
     job: &ExtractionJob,
+    lease_token: uuid::Uuid,
     action: DeliveryAction,
     error_message: &str,
 ) -> anyhow::Result<()> {
@@ -339,13 +407,21 @@ async fn apply_failure_decision(
                 error = error_message,
                 "Retrying extraction"
             );
-            ExtractionRepo::mark_retrying(
+            let marked = ExtractionRepo::mark_retrying_claimed(
                 &runtime.pool,
                 job.workspace_id,
                 job.extraction_id,
+                lease_token,
                 error_message,
             )
             .await?;
+            if marked.is_none() {
+                tracing::warn!(
+                    extraction_id = %job.extraction_id,
+                    "Stale worker retry was fenced by lease ownership"
+                );
+                return Ok(());
+            }
             runtime
                 .consumer
                 .schedule_retry(&job.envelope(), delay)
@@ -357,6 +433,7 @@ async fn apply_failure_decision(
             finish_dead_letter(
                 runtime,
                 job,
+                lease_token,
                 JobSnapshot {
                     status: JobStatus::Failed,
                     attempt: 0,
@@ -378,6 +455,7 @@ async fn apply_failure_decision(
 async fn finish_dead_letter(
     runtime: &WorkerRuntime,
     job: &ExtractionJob,
+    lease_token: uuid::Uuid,
     _snapshot: JobSnapshot,
     error_message: &str,
 ) -> anyhow::Result<()> {
@@ -386,13 +464,21 @@ async fn finish_dead_letter(
         error = error_message,
         "Extraction dead-lettered"
     );
-    ExtractionRepo::apply_failed(
+    let applied = ExtractionRepo::apply_failed_claimed(
         &runtime.pool,
         job.workspace_id,
         job.extraction_id,
+        lease_token,
         error_message,
     )
     .await?;
+    if !applied.changed {
+        tracing::warn!(
+            extraction_id = %job.extraction_id,
+            "Stale worker failure was fenced by lease ownership"
+        );
+        return Ok(());
+    }
     runtime.consumer.dead_letter_job(job, error_message).await?;
     runtime.consumer.ack(&job.stream_id).await?;
     Ok(())

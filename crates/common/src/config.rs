@@ -8,6 +8,7 @@ pub const DEFAULT_WORKER_MAX_ATTEMPTS: u32 = 5;
 pub const DEFAULT_WORKER_INITIAL_BACKOFF_MS: u64 = 1_000;
 pub const DEFAULT_WORKER_MAX_BACKOFF_MS: u64 = 60_000;
 pub const DEFAULT_WORKER_CLAIM_IDLE_BUFFER_SECS: u64 = 30;
+pub const DEFAULT_PROCESSING_LEASE_SECS: u64 = 60;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -34,6 +35,14 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self, env::VarError> {
+        let gemini_timeout_secs = parse_timeout_secs(env::var("GEMINI_TIMEOUT_SECS").ok());
+        let minimum_claim_idle_secs = minimum_claim_idle_secs(gemini_timeout_secs);
+        let worker_claim_idle_secs = parse_positive_u64(
+            env::var("WORKER_CLAIM_IDLE_SECS").ok(),
+            minimum_claim_idle_secs,
+        )
+        .max(minimum_claim_idle_secs);
+
         Ok(Self {
             database_url: env::var("DATABASE_URL")?,
             redis_url: env::var("REDIS_URL")
@@ -46,7 +55,7 @@ impl Config {
             gemini_api_key: env::var("GEMINI_API_KEY")?,
             gemini_model: env::var("GEMINI_MODEL")
                 .unwrap_or_else(|_| DEFAULT_GEMINI_MODEL.to_string()),
-            gemini_timeout_secs: parse_timeout_secs(env::var("GEMINI_TIMEOUT_SECS").ok()),
+            gemini_timeout_secs,
             server_host: env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             server_port: env::var("SERVER_PORT")
                 .ok()
@@ -77,21 +86,27 @@ impl Config {
                 env::var("WORKER_MAX_BACKOFF_MS").ok(),
                 DEFAULT_WORKER_MAX_BACKOFF_MS,
             ),
-            worker_claim_idle_secs: parse_positive_u64(
-                env::var("WORKER_CLAIM_IDLE_SECS").ok(),
-                parse_timeout_secs(env::var("GEMINI_TIMEOUT_SECS").ok())
-                    .saturating_add(DEFAULT_WORKER_CLAIM_IDLE_BUFFER_SECS),
-            ),
+            worker_claim_idle_secs,
         })
     }
 
     pub fn worker_claim_idle(&self) -> Duration {
         Duration::from_secs(self.worker_claim_idle_secs.max(1))
     }
+
+    pub fn processing_lease(&self) -> Duration {
+        Duration::from_secs(DEFAULT_PROCESSING_LEASE_SECS)
+    }
 }
 
 fn parse_timeout_secs(value: Option<String>) -> u64 {
     parse_positive_u64(value, DEFAULT_GEMINI_TIMEOUT_SECS)
+}
+
+fn minimum_claim_idle_secs(gemini_timeout_secs: u64) -> u64 {
+    gemini_timeout_secs
+        .saturating_add(DEFAULT_WORKER_CLAIM_IDLE_BUFFER_SECS)
+        .max(DEFAULT_PROCESSING_LEASE_SECS.saturating_add(DEFAULT_WORKER_CLAIM_IDLE_BUFFER_SECS))
 }
 
 fn parse_positive_usize(value: Option<String>, default: usize) -> usize {
@@ -118,8 +133,9 @@ fn parse_positive_u64(value: Option<String>, default: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_positive_usize, parse_timeout_secs, DEFAULT_GEMINI_MODEL,
-        DEFAULT_GEMINI_TIMEOUT_SECS, DEFAULT_WORKER_CONCURRENCY,
+        minimum_claim_idle_secs, parse_positive_usize, parse_timeout_secs, DEFAULT_GEMINI_MODEL,
+        DEFAULT_GEMINI_TIMEOUT_SECS, DEFAULT_PROCESSING_LEASE_SECS,
+        DEFAULT_WORKER_CLAIM_IDLE_BUFFER_SECS, DEFAULT_WORKER_CONCURRENCY,
     };
 
     #[test]
@@ -151,5 +167,13 @@ mod tests {
             parse_positive_usize(Some("16".to_string()), DEFAULT_WORKER_CONCURRENCY),
             16
         );
+    }
+
+    #[test]
+    fn claim_idle_is_longer_than_timeout_and_processing_lease() {
+        let minimum = minimum_claim_idle_secs(120);
+        assert!(minimum > 120);
+        assert!(minimum > DEFAULT_PROCESSING_LEASE_SECS);
+        assert_eq!(minimum, 120 + DEFAULT_WORKER_CLAIM_IDLE_BUFFER_SECS);
     }
 }

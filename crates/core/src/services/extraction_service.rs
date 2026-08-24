@@ -1,4 +1,5 @@
 use sqlx::PgPool;
+use std::time::Duration;
 use struxio_common::models::{
     CreateExtractionRequest, Extraction, ExtractionTemplate, InlineExtractionRequest,
 };
@@ -8,7 +9,7 @@ use struxio_db::repositories::{
 };
 use uuid::Uuid;
 
-use crate::provider::{ExtractionRequest, SharedExtractionProvider};
+use crate::provider::{ExtractionOutput, ExtractionRequest, SharedExtractionProvider};
 use crate::queue::QueueProducer;
 use crate::storage::StorageClient;
 
@@ -18,6 +19,7 @@ pub struct ExtractionService<Q: QueueProducer> {
     queue: Q,
     storage: StorageClient,
     provider: SharedExtractionProvider,
+    processing_lease: Duration,
 }
 
 impl<Q: QueueProducer> ExtractionService<Q> {
@@ -26,12 +28,14 @@ impl<Q: QueueProducer> ExtractionService<Q> {
         queue: Q,
         storage: StorageClient,
         provider: SharedExtractionProvider,
+        processing_lease: Duration,
     ) -> Self {
         Self {
             db,
             queue,
             storage,
             provider,
+            processing_lease,
         }
     }
 
@@ -97,56 +101,67 @@ impl<Q: QueueProducer> ExtractionService<Q> {
         let mime_type =
             normalize_mime_type(&doc.file_type).map_err(|e| AppError::Validation(e.to_string()))?;
 
-        let extraction = ExtractionRepo::create_with_status(
-            &self.db,
-            ctx.workspace_id(),
-            request.document_id,
-            request.template_id,
-            None,
-            "processing",
-        )
-        .await
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
         let file_bytes = self
             .storage
             .download(&doc.s3_key)
             .await
             .map_err(|e| AppError::ExternalService(e.to_string()))?;
 
+        let lease_token = Uuid::new_v4();
+        let extraction = ExtractionRepo::create_with_processing_lease(
+            &self.db,
+            ctx.workspace_id(),
+            request.document_id,
+            request.template_id,
+            None,
+            lease_token,
+            self.processing_lease,
+        )
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
         let start = std::time::Instant::now();
         match self
-            .provider
-            .extract(ExtractionRequest {
-                bytes: &file_bytes,
-                mime_type,
-                instructions: &template.prompt_template,
-                json_schema: &template.json_schema,
-            })
+            .extract_with_lease_heartbeat(
+                ctx,
+                extraction.id,
+                lease_token,
+                ExtractionRequest {
+                    bytes: &file_bytes,
+                    mime_type,
+                    instructions: &template.prompt_template,
+                    json_schema: &template.json_schema,
+                },
+            )
             .await
         {
             Ok(response) => {
                 let processing_time_ms = start.elapsed().as_millis() as i32;
-                ExtractionRepo::update_completed(
+                ExtractionRepo::apply_completed_claimed(
                     &self.db,
                     ctx.workspace_id(),
                     extraction.id,
+                    lease_token,
                     &response.result,
                     response.usage.input_tokens,
                     response.usage.output_tokens,
                     processing_time_ms,
                     model_id,
-                    0,
                 )
                 .await
+                .map(|applied| applied.extraction)
                 .map_err(|e| AppError::Database(e.to_string()))
             }
-            Err(e) => {
-                let err_msg = e.to_string();
-                ExtractionRepo::update_failed(&self.db, ctx.workspace_id(), extraction.id, &err_msg)
-                    .await
-                    .map_err(|db_err| AppError::Database(db_err.to_string()))
-            }
+            Err(error) => ExtractionRepo::apply_failed_claimed(
+                &self.db,
+                ctx.workspace_id(),
+                extraction.id,
+                lease_token,
+                &error,
+            )
+            .await
+            .map(|applied| applied.extraction)
+            .map_err(|db_err| AppError::Database(db_err.to_string())),
         }
     }
 
@@ -226,5 +241,42 @@ impl<Q: QueueProducer> ExtractionService<Q> {
 
     fn can_access_template(ctx: &PrincipalContext, template: &ExtractionTemplate) -> bool {
         template.workspace_id == ctx.workspace_id()
+    }
+
+    async fn extract_with_lease_heartbeat(
+        &self,
+        ctx: &PrincipalContext,
+        extraction_id: Uuid,
+        lease_token: Uuid,
+        request: ExtractionRequest<'_>,
+    ) -> Result<ExtractionOutput, String> {
+        let heartbeat_every = (self.processing_lease / 3).max(Duration::from_secs(1));
+        let mut heartbeat = tokio::time::interval_at(
+            tokio::time::Instant::now() + heartbeat_every,
+            heartbeat_every,
+        );
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let work = self.provider.extract(request);
+        tokio::pin!(work);
+
+        loop {
+            tokio::select! {
+                result = &mut work => return result.map_err(|error| error.to_string()),
+                _ = heartbeat.tick() => {
+                    let renewed = ExtractionRepo::renew_processing_lease(
+                        &self.db,
+                        ctx.workspace_id(),
+                        extraction_id,
+                        lease_token,
+                        self.processing_lease,
+                    )
+                    .await
+                    .map_err(|error| format!("processing lease heartbeat failed: {error}"))?;
+                    if !renewed {
+                        return Err("processing lease ownership lost".to_string());
+                    }
+                }
+            }
+        }
     }
 }

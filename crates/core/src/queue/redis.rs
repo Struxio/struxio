@@ -208,6 +208,23 @@ impl RedisConsumer {
         Ok(())
     }
 
+    /// Keep ownership of an in-flight stream entry and reset its PEL idle time.
+    pub async fn touch(&self, stream_id: &str) -> Result<bool, QueueError> {
+        let mut conn = self.client.get_multiplexed_async_connection().await?;
+        let claimed: Vec<String> = ::redis::cmd("XCLAIM")
+            .arg(READY_STREAM)
+            .arg(&self.group)
+            .arg(&self.consumer)
+            .arg(0)
+            .arg(stream_id)
+            .arg("IDLE")
+            .arg(0)
+            .arg("JUSTID")
+            .query_async(&mut conn)
+            .await?;
+        Ok(!claimed.is_empty())
+    }
+
     pub async fn dead_letter_job(
         &self,
         job: &ExtractionJob,

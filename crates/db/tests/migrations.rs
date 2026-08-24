@@ -183,6 +183,16 @@ async fn processing_leases_and_outbox_are_installed() {
     .expect("processing lease column");
     assert_eq!(lease.0, "YES");
     assert_eq!(lease.1, "timestamp with time zone");
+    let token: (String, String) = sqlx::query_as(
+        "SELECT is_nullable, data_type FROM information_schema.columns \
+         WHERE table_name = 'extractions' \
+           AND column_name = 'processing_lease_token'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("processing lease token");
+    assert_eq!(token.0, "YES");
+    assert_eq!(token.1, "uuid");
 
     let outbox_fk: Option<(String,)> = sqlx::query_as(
         "SELECT constraint_name FROM information_schema.table_constraints \

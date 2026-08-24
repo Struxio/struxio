@@ -88,7 +88,8 @@ async fn processing_lease_allows_only_one_live_claim() {
     let pool = connect().await;
     let (workspace, _batch_id, ids) = fixture(&pool, 1).await;
     sqlx::query(
-        "UPDATE extractions SET status = 'pending', processing_lease_expires_at = NULL \
+        "UPDATE extractions SET status = 'pending', processing_lease_expires_at = NULL, \
+                processing_lease_token = NULL \
          WHERE id = $1",
     )
     .bind(ids[0])
@@ -96,10 +97,22 @@ async fn processing_lease_allows_only_one_live_claim() {
     .await
     .expect("reset pending");
 
-    let first =
-        ExtractionRepo::claim_for_processing(&pool, workspace, ids[0], Duration::from_secs(60));
-    let second =
-        ExtractionRepo::claim_for_processing(&pool, workspace, ids[0], Duration::from_secs(60));
+    let first_token = Uuid::new_v4();
+    let second_token = Uuid::new_v4();
+    let first = ExtractionRepo::claim_for_processing(
+        &pool,
+        workspace,
+        ids[0],
+        first_token,
+        Duration::from_secs(60),
+    );
+    let second = ExtractionRepo::claim_for_processing(
+        &pool,
+        workspace,
+        ids[0],
+        second_token,
+        Duration::from_secs(60),
+    );
     let (first, second) = tokio::join!(first, second);
     let outcomes = [first.expect("first claim"), second.expect("second claim")];
     assert_eq!(
@@ -109,6 +122,29 @@ async fn processing_lease_allows_only_one_live_claim() {
             .count(),
         1
     );
+    let live_token = if matches!(outcomes[0], ClaimOutcome::Run(_)) {
+        first_token
+    } else {
+        second_token
+    };
+    assert!(!ExtractionRepo::renew_processing_lease(
+        &pool,
+        workspace,
+        ids[0],
+        Uuid::new_v4(),
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap());
+    assert!(ExtractionRepo::renew_processing_lease(
+        &pool,
+        workspace,
+        ids[0],
+        live_token,
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap());
     assert_eq!(
         outcomes
             .iter()
@@ -131,16 +167,38 @@ async fn processing_lease_allows_only_one_live_claim() {
     .execute(&pool)
     .await
     .expect("expire lease");
-    let reclaimed =
-        ExtractionRepo::claim_for_processing(&pool, workspace, ids[0], Duration::from_secs(60))
-            .await
-            .expect("reclaim");
+    let reclaimed_token = Uuid::new_v4();
+    let reclaimed = ExtractionRepo::claim_for_processing(
+        &pool,
+        workspace,
+        ids[0],
+        reclaimed_token,
+        Duration::from_secs(60),
+    )
+    .await
+    .expect("reclaim");
     assert!(matches!(reclaimed, ClaimOutcome::Run(_)));
     let stored = ExtractionRepo::find_by_id(&pool, workspace, ids[0])
         .await
         .unwrap()
         .unwrap();
     assert_eq!(stored.attempt, 1, "lease reclaim must not burn an attempt");
+
+    let stale = ExtractionRepo::apply_completed_claimed(
+        &pool,
+        workspace,
+        ids[0],
+        live_token,
+        &json!({"stale": true}),
+        1,
+        1,
+        1,
+        "gemini-2.5-flash",
+    )
+    .await
+    .expect("stale completion is fenced");
+    assert!(!stale.changed);
+    assert_eq!(stale.extraction.status, "processing");
 }
 
 #[tokio::test]

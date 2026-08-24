@@ -71,6 +71,7 @@ impl AppState {
                 queue.clone(),
                 storage,
                 provider.clone(),
+                config.processing_lease(),
             ),
             batch_service: BatchService::new(db_pool.clone(), queue),
             model_service: ModelService::new(db_pool, config.gemini_model.clone()),
