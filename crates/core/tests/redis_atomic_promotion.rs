@@ -23,7 +23,8 @@ async fn concurrent_promoters_emit_one_ready_entry() {
         .await
         .expect("clear queue keys");
 
-    let consumer = RedisConsumer::for_workers(client, format!("atomic-test-{}", Uuid::new_v4()));
+    let consumer =
+        RedisConsumer::for_workers(client.clone(), format!("atomic-test-{}", Uuid::new_v4()));
     let envelope = JobEnvelope {
         extraction_id: Uuid::new_v4(),
         document_id: Uuid::new_v4(),
