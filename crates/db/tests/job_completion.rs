@@ -84,6 +84,43 @@ async fn batch_row(pool: &PgPool, batch_id: Uuid) -> (String, i32, i32) {
 }
 
 #[tokio::test]
+async fn migrated_legacy_processing_row_is_reclaimable() {
+    let pool = connect().await;
+    let (workspace, _batch_id, ids) = fixture(&pool, 1).await;
+    let before: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT processing_lease_expires_at FROM extractions WHERE id = $1")
+            .bind(ids[0])
+            .fetch_one(&pool)
+            .await
+            .expect("legacy lease");
+    assert!(before.is_none());
+
+    sqlx::query(
+        "UPDATE extractions SET processing_lease_expires_at = now() \
+         WHERE id = $1 AND status = 'processing' \
+           AND processing_lease_expires_at IS NULL",
+    )
+    .bind(ids[0])
+    .execute(&pool)
+    .await
+    .expect("backfill legacy lease");
+
+    let claimed = ExtractionRepo::claim_for_processing(
+        &pool,
+        workspace,
+        ids[0],
+        Uuid::new_v4(),
+        Duration::from_secs(60),
+    )
+    .await
+    .expect("claim legacy row");
+    let ClaimOutcome::Run(extraction) = claimed else {
+        panic!("expired legacy row must run");
+    };
+    assert_eq!(extraction.attempt, 0);
+}
+
+#[tokio::test]
 async fn processing_lease_allows_only_one_live_claim() {
     let pool = connect().await;
     let (workspace, _batch_id, ids) = fixture(&pool, 1).await;
