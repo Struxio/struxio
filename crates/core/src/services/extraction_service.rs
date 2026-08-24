@@ -263,14 +263,18 @@ impl<Q: QueueProducer> ExtractionService<Q> {
             tokio::select! {
                 result = &mut work => return result.map_err(|error| error.to_string()),
                 _ = heartbeat.tick() => {
-                    let renewed = ExtractionRepo::renew_processing_lease(
-                        &self.db,
-                        ctx.workspace_id(),
-                        extraction_id,
-                        lease_token,
-                        self.processing_lease,
+                    let renewed = tokio::time::timeout(
+                        heartbeat_every,
+                        ExtractionRepo::renew_processing_lease(
+                            &self.db,
+                            ctx.workspace_id(),
+                            extraction_id,
+                            lease_token,
+                            self.processing_lease,
+                        ),
                     )
                     .await
+                    .map_err(|_| "processing lease heartbeat timed out".to_string())?
                     .map_err(|error| format!("processing lease heartbeat failed: {error}"))?;
                     if !renewed {
                         return Err("processing lease ownership lost".to_string());

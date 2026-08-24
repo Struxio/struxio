@@ -300,30 +300,35 @@ async fn process_with_lease_heartbeat(
         tokio::select! {
             result = &mut work => return result,
             _ = heartbeat.tick() => {
-                let renewed = ExtractionRepo::renew_processing_lease(
-                    &runtime.pool,
-                    job.workspace_id,
-                    job.extraction_id,
-                    lease_token,
-                    runtime.lease_duration,
-                )
-                .await
-                .map_err(|error| JobError::retryable(format!(
-                    "processing lease heartbeat failed: {error}"
-                )))?;
-                if !renewed {
-                    return Err(JobError::retryable("processing lease ownership lost"));
-                }
-                let touched = runtime
-                    .consumer
-                    .touch(&job.stream_id)
+                tokio::time::timeout(heartbeat_every, async {
+                    let renewed = ExtractionRepo::renew_processing_lease(
+                        &runtime.pool,
+                        job.workspace_id,
+                        job.extraction_id,
+                        lease_token,
+                        runtime.lease_duration,
+                    )
                     .await
                     .map_err(|error| JobError::retryable(format!(
-                        "queue heartbeat failed: {error}"
+                        "processing lease heartbeat failed: {error}"
                     )))?;
-                if !touched {
-                    return Err(JobError::retryable("queue delivery ownership lost"));
-                }
+                    if !renewed {
+                        return Err(JobError::retryable("processing lease ownership lost"));
+                    }
+                    let touched = runtime
+                        .consumer
+                        .touch(&job.stream_id)
+                        .await
+                        .map_err(|error| JobError::retryable(format!(
+                            "queue heartbeat failed: {error}"
+                        )))?;
+                    if !touched {
+                        return Err(JobError::retryable("queue delivery ownership lost"));
+                    }
+                    Ok(())
+                })
+                .await
+                .map_err(|_| JobError::retryable("processing lease heartbeat timed out"))??;
             }
         }
     }
