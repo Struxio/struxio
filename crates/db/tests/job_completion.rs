@@ -5,8 +5,9 @@
 
 use serde_json::json;
 use sqlx::PgPool;
+use std::time::Duration;
 use struxio_common::{WorkspaceId, LOCAL_WORKSPACE_UUID};
-use struxio_db::repositories::extractions::ExtractionRepo;
+use struxio_db::repositories::extractions::{ClaimOutcome, ExtractionRepo};
 use uuid::Uuid;
 
 async fn connect() -> PgPool {
@@ -80,6 +81,66 @@ async fn batch_row(pool: &PgPool, batch_id: Uuid) -> (String, i32, i32) {
     .fetch_one(pool)
     .await
     .expect("batch row")
+}
+
+#[tokio::test]
+async fn processing_lease_allows_only_one_live_claim() {
+    let pool = connect().await;
+    let (workspace, _batch_id, ids) = fixture(&pool, 1).await;
+    sqlx::query(
+        "UPDATE extractions SET status = 'pending', processing_lease_expires_at = NULL \
+         WHERE id = $1",
+    )
+    .bind(ids[0])
+    .execute(&pool)
+    .await
+    .expect("reset pending");
+
+    let first =
+        ExtractionRepo::claim_for_processing(&pool, workspace, ids[0], Duration::from_secs(60));
+    let second =
+        ExtractionRepo::claim_for_processing(&pool, workspace, ids[0], Duration::from_secs(60));
+    let (first, second) = tokio::join!(first, second);
+    let outcomes = [first.expect("first claim"), second.expect("second claim")];
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, ClaimOutcome::Run(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, ClaimOutcome::AlreadyProcessing(_)))
+            .count(),
+        1
+    );
+
+    let stored = ExtractionRepo::find_by_id(&pool, workspace, ids[0])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.attempt, 1);
+
+    sqlx::query(
+        "UPDATE extractions SET processing_lease_expires_at = now() - interval '1 second' \
+         WHERE id = $1",
+    )
+    .bind(ids[0])
+    .execute(&pool)
+    .await
+    .expect("expire lease");
+    let reclaimed =
+        ExtractionRepo::claim_for_processing(&pool, workspace, ids[0], Duration::from_secs(60))
+            .await
+            .expect("reclaim");
+    assert!(matches!(reclaimed, ClaimOutcome::Run(_)));
+    let stored = ExtractionRepo::find_by_id(&pool, workspace, ids[0])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.attempt, 1, "lease reclaim must not burn an attempt");
 }
 
 #[tokio::test]

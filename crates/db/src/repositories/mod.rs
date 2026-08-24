@@ -5,6 +5,7 @@ pub mod documents;
 pub mod evaluations;
 pub mod evidence;
 pub mod extractions;
+pub mod outbox;
 pub mod templates;
 pub mod workspaces;
 

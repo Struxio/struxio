@@ -1,5 +1,6 @@
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
+use std::time::Duration;
 use struxio_common::models::{ChildCounts, Extraction};
 use struxio_common::WorkspaceId;
 use uuid::Uuid;
@@ -73,6 +74,28 @@ impl ExtractionRepo {
         .fetch_one(pool)
         .await?;
 
+        row_to_extraction(row)
+    }
+
+    pub(crate) async fn create_in_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        workspace_id: WorkspaceId,
+        document_id: Uuid,
+        template_id: Uuid,
+        batch_job_id: Option<Uuid>,
+    ) -> Result<Extraction, sqlx::Error> {
+        let row = sqlx::query(&format!(
+            "INSERT INTO extractions \
+             (workspace_id, document_id, template_id, batch_job_id, status) \
+             VALUES ($1, $2, $3, $4, 'pending') \
+             RETURNING {SELECT_COLS}",
+        ))
+        .bind(workspace_id.as_uuid())
+        .bind(document_id)
+        .bind(template_id)
+        .bind(batch_job_id)
+        .fetch_one(&mut **tx)
+        .await?;
         row_to_extraction(row)
     }
 
@@ -237,26 +260,38 @@ impl ExtractionRepo {
         row_to_extraction(row)
     }
 
-    /// Claim an open extraction for execution. Increments `attempt` when leaving
-    /// `pending` or `retrying`. A `processing` row (crash reclaim) keeps its attempt.
+    /// Exclusively claim an open extraction for execution.
+    ///
+    /// A live `processing` lease cannot be claimed by another worker. An expired
+    /// lease may be reclaimed after a worker crash without incrementing `attempt`.
     pub async fn claim_for_processing(
         pool: &PgPool,
         workspace_id: WorkspaceId,
         id: Uuid,
+        lease_duration: Duration,
     ) -> Result<ClaimOutcome, sqlx::Error> {
+        let lease_millis = i64::try_from(lease_duration.as_millis()).unwrap_or(i64::MAX);
         let row = sqlx::query(&format!(
             "UPDATE extractions SET \
                 status = 'processing', \
                 attempt = CASE \
                     WHEN status IN ('pending', 'retrying') THEN attempt + 1 \
                     ELSE attempt \
-                END \
+                END, \
+                processing_lease_expires_at = now() + ($3 * interval '1 millisecond') \
              WHERE workspace_id = $1 AND id = $2 \
-               AND status IN ('pending', 'retrying', 'processing') \
+               AND ( \
+                    status IN ('pending', 'retrying') \
+                    OR (status = 'processing' AND ( \
+                        processing_lease_expires_at IS NULL \
+                        OR processing_lease_expires_at <= now() \
+                    )) \
+               ) \
              RETURNING {SELECT_COLS}",
         ))
         .bind(workspace_id.as_uuid())
         .bind(id)
+        .bind(lease_millis)
         .fetch_optional(pool)
         .await?;
 
@@ -270,8 +305,8 @@ impl ExtractionRepo {
         }
 
         match Self::find_by_id(pool, workspace_id, id).await? {
-            Some(existing) if existing.status == "completed" || existing.status == "failed" => {
-                Ok(ClaimOutcome::SkipTerminal(existing))
+            Some(existing) if existing.status == "processing" => {
+                Ok(ClaimOutcome::AlreadyProcessing(existing))
             }
             Some(existing) => Ok(ClaimOutcome::SkipTerminal(existing)),
             None => Ok(ClaimOutcome::Missing),
@@ -285,7 +320,8 @@ impl ExtractionRepo {
         error_message: &str,
     ) -> Result<Option<Extraction>, sqlx::Error> {
         let row = sqlx::query(&format!(
-            "UPDATE extractions SET status = 'retrying', error_message = $3 \
+            "UPDATE extractions SET status = 'retrying', error_message = $3, \
+                    processing_lease_expires_at = NULL \
              WHERE workspace_id = $1 AND id = $2 \
                AND status NOT IN ('completed', 'failed') \
              RETURNING {SELECT_COLS}",
@@ -350,6 +386,7 @@ impl ExtractionRepo {
 #[derive(Debug, Clone)]
 pub enum ClaimOutcome {
     Run(Extraction),
+    AlreadyProcessing(Extraction),
     SkipTerminal(Extraction),
     Missing,
 }
@@ -392,7 +429,8 @@ async fn apply_terminal_in_tx(
             sqlx::query(&format!(
                 "UPDATE extractions SET status = 'completed', result = $3, input_tokens = $4, \
                         output_tokens = $5, processing_time_ms = $6, completed_at = now(), \
-                        model_id = $7, credits_charged = 0, error_message = NULL \
+                        model_id = $7, credits_charged = 0, error_message = NULL, \
+                        processing_lease_expires_at = NULL \
                  WHERE workspace_id = $1 AND id = $2 \
                    AND status NOT IN ('completed', 'failed') \
                  RETURNING {SELECT_COLS}",
@@ -409,7 +447,8 @@ async fn apply_terminal_in_tx(
         }
         TerminalWrite::Failed { error_message } => {
             sqlx::query(&format!(
-            "UPDATE extractions SET status = 'failed', error_message = $3, completed_at = now() \
+            "UPDATE extractions SET status = 'failed', error_message = $3, completed_at = now(), \
+                    processing_lease_expires_at = NULL \
                  WHERE workspace_id = $1 AND id = $2 \
                    AND status NOT IN ('completed', 'failed') \
                  RETURNING {SELECT_COLS}",

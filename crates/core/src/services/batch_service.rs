@@ -8,6 +8,7 @@ use struxio_db::repositories::{
 use uuid::Uuid;
 
 use crate::queue::QueueProducer;
+use crate::services::outbox_service::flush_batch_outbox;
 
 #[derive(Clone)]
 pub struct BatchService<Q: QueueProducer> {
@@ -31,48 +32,45 @@ impl<Q: QueueProducer> BatchService<Q> {
             .map_err(|e| AppError::Database(e.to_string()))?
             .ok_or_else(|| AppError::NotFound("Template not found".to_string()))?;
 
-        let total_documents = request.document_ids.len() as i32;
-        if total_documents == 0 {
+        if request.document_ids.is_empty() {
             return Err(AppError::Validation(
                 "document_ids must not be empty".to_string(),
             ));
         }
-
-        let batch = BatchJobRepo::create(
-            &self.db,
-            ctx.workspace_id(),
-            request.template_id,
-            total_documents,
-        )
-        .await
-        .map_err(|e| AppError::Database(e.to_string()))?;
 
         for doc_id in &request.document_ids {
             DocumentRepo::find_by_id(&self.db, ctx.workspace_id(), *doc_id)
                 .await
                 .map_err(|e| AppError::Database(e.to_string()))?
                 .ok_or_else(|| AppError::NotFound("Document not found".to_string()))?;
+        }
 
-            let extraction = ExtractionRepo::create(
-                &self.db,
-                ctx.workspace_id(),
-                *doc_id,
-                request.template_id,
-                Some(batch.id),
-            )
-            .await
-            .map_err(|e| AppError::Database(e.to_string()))?;
+        let batch = BatchJobRepo::create_with_extractions(
+            &self.db,
+            ctx.workspace_id(),
+            request.template_id,
+            &request.document_ids,
+        )
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
 
-            self.queue
-                .enqueue_extraction(
-                    extraction.id,
-                    extraction.document_id,
-                    extraction.template_id,
-                    ctx.workspace_id(),
-                    extraction.batch_job_id,
-                )
-                .await
-                .map_err(|e| AppError::ExternalService(e.to_string()))?;
+        match flush_batch_outbox(&self.db, &self.queue, ctx.workspace_id(), batch.id).await {
+            Ok(flush) if flush.failed > 0 => {
+                tracing::warn!(
+                    batch_id = %batch.id,
+                    published = flush.published,
+                    failed = flush.failed,
+                    "Batch committed with pending outbox jobs"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(
+                    batch_id = %batch.id,
+                    %error,
+                    "Batch committed; outbox publishing will be retried"
+                );
+            }
         }
 
         let _ = model_id; // reserved for future per-model pricing

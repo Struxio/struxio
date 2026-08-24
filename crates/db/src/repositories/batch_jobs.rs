@@ -45,6 +45,41 @@ impl BatchJobRepo {
         row_to_batch(row)
     }
 
+    pub async fn create_with_extractions(
+        pool: &PgPool,
+        workspace_id: WorkspaceId,
+        template_id: Uuid,
+        document_ids: &[Uuid],
+    ) -> Result<BatchJob, sqlx::Error> {
+        let mut tx = pool.begin().await?;
+        let row = sqlx::query(&format!(
+            "INSERT INTO batch_jobs (workspace_id, template_id, total_documents) \
+             VALUES ($1, $2, $3) \
+             RETURNING {SELECT_COLS}",
+        ))
+        .bind(workspace_id.as_uuid())
+        .bind(template_id)
+        .bind(i32::try_from(document_ids.len()).unwrap_or(i32::MAX))
+        .fetch_one(&mut *tx)
+        .await?;
+        let batch = row_to_batch(row)?;
+
+        for document_id in document_ids {
+            let extraction = super::extractions::ExtractionRepo::create_in_tx(
+                &mut tx,
+                workspace_id,
+                *document_id,
+                template_id,
+                Some(batch.id),
+            )
+            .await?;
+            super::outbox::ExtractionOutboxRepo::insert_in_tx(&mut tx, &extraction).await?;
+        }
+
+        tx.commit().await?;
+        Ok(batch)
+    }
+
     pub async fn find_by_id(
         pool: &PgPool,
         workspace_id: WorkspaceId,

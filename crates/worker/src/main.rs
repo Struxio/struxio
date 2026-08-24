@@ -11,8 +11,9 @@ use struxio_core::{
     gemini::GeminiClient,
     jobs::{event_for_error, step, DeliveryAction, JobError, JobSnapshot, JobStatus, RetryPolicy},
     provider::{ExtractionRequest, ProviderError, SharedExtractionProvider},
-    queue::redis::RedisConsumer,
+    queue::redis::{RedisConsumer, RedisProducer},
     queue::{ExtractionJob, QueueConsumer, StreamDelivery},
+    services::outbox_service::flush_extraction_outbox,
     storage::StorageClient,
 };
 use struxio_db::repositories::{
@@ -60,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
     let provider: SharedExtractionProvider = Arc::new(gemini);
 
     let consumer_name = format!("worker-{}", uuid::Uuid::new_v4());
+    let producer = RedisProducer::new(redis.clone());
     let consumer = RedisConsumer::for_workers(redis, consumer_name);
     consumer.ensure_group().await?;
 
@@ -73,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
         pool,
         storage,
         provider,
+        producer,
         consumer,
         policy,
         model_id: config.gemini_model.clone(),
@@ -88,6 +91,20 @@ async fn main() -> anyhow::Result<()> {
 
     let semaphore = Arc::new(Semaphore::new(runtime.concurrency));
     loop {
+        match flush_extraction_outbox(&runtime.pool, &runtime.producer, runtime.concurrency).await {
+            Ok(flush) if flush.failed > 0 => {
+                tracing::warn!(
+                    published = flush.published,
+                    failed = flush.failed,
+                    "Some extraction outbox jobs remain pending"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::error!(%error, "Failed to flush extraction outbox");
+            }
+        }
+
         if let Err(e) = runtime.consumer.promote_delayed(runtime.concurrency).await {
             tracing::error!(error = %e, "Failed to promote delayed retries");
         }
@@ -121,6 +138,7 @@ struct WorkerRuntime {
     pool: PgPool,
     storage: StorageClient,
     provider: SharedExtractionProvider,
+    producer: RedisProducer,
     consumer: RedisConsumer,
     policy: RetryPolicy,
     model_id: String,
@@ -164,8 +182,13 @@ async fn handle_job(runtime: &WorkerRuntime, job: ExtractionJob) -> anyhow::Resu
         "Processing extraction"
     );
 
-    match ExtractionRepo::claim_for_processing(&runtime.pool, job.workspace_id, job.extraction_id)
-        .await
+    match ExtractionRepo::claim_for_processing(
+        &runtime.pool,
+        job.workspace_id,
+        job.extraction_id,
+        runtime.claim_idle,
+    )
+    .await
     {
         Ok(ClaimOutcome::Missing) => {
             runtime
@@ -182,6 +205,14 @@ async fn handle_job(runtime: &WorkerRuntime, job: ExtractionJob) -> anyhow::Resu
                 "Skipping already-terminal extraction"
             );
             runtime.consumer.ack(&job.stream_id).await?;
+            Ok(())
+        }
+        Ok(ClaimOutcome::AlreadyProcessing(existing)) => {
+            tracing::info!(
+                extraction_id = %job.extraction_id,
+                status = %existing.status,
+                "Extraction already has a live processing lease"
+            );
             Ok(())
         }
         Ok(ClaimOutcome::Run(claimed)) => {

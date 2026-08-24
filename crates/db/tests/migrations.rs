@@ -36,6 +36,7 @@ async fn tenant_tables_have_non_null_workspace_id() {
         "extraction_validation_reports",
         "extraction_eval_runs",
         "extraction_eval_run_results",
+        "extraction_outbox",
     ];
     for table in tables {
         let row: (String, String) = sqlx::query_as(
@@ -167,4 +168,29 @@ async fn extractions_have_non_negative_attempt() {
     .expect("attempt column");
     assert_eq!(row.0, "NO");
     assert_eq!(row.1, "integer");
+}
+
+#[tokio::test]
+async fn processing_leases_and_outbox_are_installed() {
+    let pool = connect().await;
+    let lease: (String, String) = sqlx::query_as(
+        "SELECT is_nullable, data_type FROM information_schema.columns \
+         WHERE table_name = 'extractions' \
+           AND column_name = 'processing_lease_expires_at'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("processing lease column");
+    assert_eq!(lease.0, "YES");
+    assert_eq!(lease.1, "timestamp with time zone");
+
+    let outbox_fk: Option<(String,)> = sqlx::query_as(
+        "SELECT constraint_name FROM information_schema.table_constraints \
+         WHERE constraint_name = 'extraction_outbox_workspace_extraction_fkey' \
+           AND constraint_type = 'FOREIGN KEY'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert!(outbox_fk.is_some());
 }

@@ -12,6 +12,48 @@ use super::{
 };
 use crate::jobs::{JobEnvelope, CONSUMER_GROUP, DELAYED_ZSET, DLQ_STREAM, READY_STREAM};
 
+const PROMOTE_DELAYED_LUA: &str = r#"
+local payloads = redis.call(
+    'ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2]
+)
+local promoted = 0
+
+for _, payload in ipairs(payloads) do
+    local ok, job = pcall(cjson.decode, payload)
+    if ok
+        and type(job) == 'table'
+        and type(job.extraction_id) == 'string'
+        and type(job.document_id) == 'string'
+        and type(job.template_id) == 'string'
+        and type(job.workspace_id) == 'string'
+    then
+        local fields = {
+            'extraction_id', job.extraction_id,
+            'document_id', job.document_id,
+            'template_id', job.template_id,
+            'workspace_id', job.workspace_id
+        }
+        if type(job.batch_job_id) == 'string' then
+            table.insert(fields, 'batch_job_id')
+            table.insert(fields, job.batch_job_id)
+        end
+        redis.call('XADD', KEYS[2], '*', unpack(fields))
+    else
+        redis.call(
+            'XADD', KEYS[3], '*',
+            'original_id', '0-0',
+            'payload', payload,
+            'error', 'invalid delayed job payload',
+            'dead_lettered_at', ARGV[3]
+        )
+    end
+    redis.call('ZREM', KEYS[1], payload)
+    promoted = promoted + 1
+end
+
+return promoted
+"#;
+
 // ── Producer ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -70,47 +112,22 @@ impl RedisConsumer {
         Self::new(client, CONSUMER_GROUP.to_string(), consumer)
     }
 
-    /// Move due delayed jobs onto the ready stream. Duplicates are safe because
-    /// job execution is idempotent at the extraction row.
+    /// Atomically move due delayed jobs onto the ready stream.
     pub async fn promote_delayed(&self, limit: usize) -> Result<usize, QueueError> {
         if limit == 0 {
             return Ok(0);
         }
         let mut conn = self.client.get_multiplexed_async_connection().await?;
         let now_ms = Utc::now().timestamp_millis();
-        let payloads: Vec<String> = ::redis::cmd("ZRANGEBYSCORE")
-            .arg(DELAYED_ZSET)
-            .arg(0)
+        let promoted: usize = ::redis::Script::new(PROMOTE_DELAYED_LUA)
+            .key(DELAYED_ZSET)
+            .key(READY_STREAM)
+            .key(DLQ_STREAM)
             .arg(now_ms)
-            .arg("LIMIT")
-            .arg(0)
             .arg(limit)
-            .query_async(&mut conn)
+            .arg(Utc::now().to_rfc3339())
+            .invoke_async(&mut conn)
             .await?;
-
-        let mut promoted = 0usize;
-        for payload in payloads {
-            match JobEnvelope::from_delayed_payload(&payload) {
-                Ok(envelope) => {
-                    xadd_envelope(&mut conn, READY_STREAM, &envelope).await?;
-                }
-                Err(err) => {
-                    xadd_dlq_raw(
-                        &mut conn,
-                        "0-0",
-                        &[(String::from("payload"), payload.clone())],
-                        err.message(),
-                    )
-                    .await?;
-                }
-            }
-            let _: i32 = ::redis::cmd("ZREM")
-                .arg(DELAYED_ZSET)
-                .arg(&payload)
-                .query_async(&mut conn)
-                .await?;
-            promoted += 1;
-        }
         Ok(promoted)
     }
 
