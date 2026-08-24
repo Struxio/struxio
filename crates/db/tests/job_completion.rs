@@ -385,3 +385,35 @@ async fn mixed_terminal_children_are_partially_completed() {
     assert_eq!(completed, 1);
     assert_eq!(failed, 1);
 }
+
+#[tokio::test]
+async fn missing_requested_children_keep_batch_processing() {
+    let pool = connect().await;
+    let (workspace, batch_id, ids) = fixture(&pool, 2).await;
+    sqlx::query("UPDATE batch_jobs SET total_documents = 5 WHERE id = $1")
+        .bind(batch_id)
+        .execute(&pool)
+        .await
+        .expect("raise expected total");
+
+    let result = json!({"ok": true});
+    for id in ids {
+        ExtractionRepo::apply_completed(
+            &pool,
+            workspace,
+            id,
+            &result,
+            1,
+            1,
+            10,
+            "gemini-2.5-flash",
+        )
+        .await
+        .expect("complete existing child");
+    }
+
+    let (status, completed, failed) = batch_row(&pool, batch_id).await;
+    assert_eq!(status, "processing");
+    assert_eq!(completed, 2);
+    assert_eq!(failed, 0);
+}

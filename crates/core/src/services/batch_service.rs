@@ -73,7 +73,7 @@ impl<Q: QueueProducer> BatchService<Q> {
             }
         }
 
-        let _ = model_id; // reserved for future per-model pricing
+        let _ = model_id;
         Ok(batch)
     }
 

@@ -387,13 +387,15 @@ async fn process_extraction(
 }
 
 fn provider_job_error(error: ProviderError) -> JobError {
-    match error {
+    tracing::warn!(error = %error, "provider extract failed");
+    let public = error.client_message().to_string();
+    match &error {
         ProviderError::Timeout
         | ProviderError::Transient(_)
-        | ProviderError::StructuredOutput(_) => JobError::retryable(error.to_string()),
+        | ProviderError::StructuredOutput(_) => JobError::retryable(public),
         ProviderError::UnsupportedMediaType(_)
         | ProviderError::Incompatible { .. }
-        | ProviderError::Backend(_) => JobError::permanent(error.to_string()),
+        | ProviderError::Backend(_) => JobError::permanent(public),
     }
 }
 

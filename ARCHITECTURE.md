@@ -9,9 +9,10 @@ A self-hostable document extraction API. You upload documents, define JSON schem
 ```
 struxio/
 ├── crates/
-│   ├── common/     ← shared models, AppError, Config
+│   ├── common/     ← shared models, AppError, Config, PrincipalContext
+│   ├── contracts/  ← immutable extraction contracts (not on the live extract path)
 │   ├── db/         ← SQLx repository layer (raw DB queries)
-│   ├── core/       ← business logic, services, queue traits, storage, Gemini
+│   ├── core/       ← business logic, services, queue, provider trait, Gemini adapter
 │   ├── api/        ← Axum HTTP server, routes, auth middleware
 │   ├── mcp/        ← stdio MCP adapter over the same services
 │   └── worker/     ← background job processor binary
@@ -22,9 +23,9 @@ struxio/
 ### Dependency flow
 
 ```
-common → db → core → api
-                   ↘ mcp
-                   ↘ worker
+common + contracts → db → core → api
+                                  ↘ mcp
+                                  ↘ worker
 ```
 
 `api`, `mcp`, and `worker` are the binaries. Everything else is a library crate. The MCP crate talks only to application services with a `PrincipalContext`; it does not call repositories. See [docs/mcp.md](./docs/mcp.md).
@@ -35,11 +36,15 @@ common → db → core → api
 
 | Table | Purpose |
 |---|---|
-| `documents` | Uploaded files (stored in S3/MinIO) |
-| `extraction_templates` | Reusable JSON schemas + Gemini prompt templates |
+| `workspaces` | Tenant workspaces. OSS seeds one `local` row |
+| `principals` | Identities. OSS seeds `local`/`operator` |
+| `workspace_memberships` | Principal scopes inside a workspace |
+| `documents` | Uploaded files (S3/MinIO), scoped by `workspace_id` |
+| `extraction_templates` | Mutable JSON schemas + prompts. Live extract still uses these |
 | `extractions` | Individual extraction jobs with status and result |
 | `batch_jobs` | A batch run that fans out to many extractions |
-| `ai_models` | AI model registry with pricing metadata |
+| `ai_models` | Global AI model registry with pricing metadata |
+| `extraction_contract_*` | Hash-addressed immutable contracts, evidence, evals. Append-only. Not wired to HTTP/MCP extract |
 
 ---
 
@@ -62,7 +67,7 @@ sequenceDiagram
     participant S3 as S3/MinIO
 
     C->>API: POST /v1/documents/check { md5_hash, file_name, file_type, size_bytes }
-    API->>DB: DocumentRepo::find_by_hash(md5_hash)
+    API->>DB: DocumentRepo::find_by_hash(workspace_id, md5_hash)
     alt document already exists
         DB-->>API: Document
         API-->>C: 200 { exists: true, document: {...} }
@@ -172,16 +177,16 @@ sequenceDiagram
     participant API as struxio-api
     participant DB as Postgres
     participant S3 as S3/MinIO
-    participant G as Gemini API
+    participant P as ExtractionProvider
 
     C->>API: POST /v1/extractions { document_id, template_id }
-    API->>DB: DocumentRepo::find_by_id(document_id)
-    API->>DB: TemplateRepo::find_by_id(template_id)
+    API->>DB: DocumentRepo::find_by_id(workspace_id, document_id)
+    API->>DB: TemplateRepo::find_by_id(workspace_id, template_id)
     API->>DB: ExtractionRepo::create_with_status(status="processing")
     API->>S3: StorageClient::download(s3_key)
     S3-->>API: file bytes
-    API->>G: GeminiClient::extract(bytes, mime_type, prompt, schema)
-    G-->>API: { result, input_tokens, output_tokens }
+    API->>P: ExtractionProvider::extract(bytes, mime_type, prompt, schema)
+    P-->>API: { result, input_tokens, output_tokens }
     API->>DB: ExtractionRepo::update_completed(result, tokens, model_id)
     DB-->>API: Extraction
     API-->>C: 200 Extraction { status: "completed", result: {...} }
@@ -220,12 +225,12 @@ sequenceDiagram
     participant API as struxio-api
     participant DB as Postgres
     participant S3 as S3/MinIO
-    participant G as Gemini API
+    participant P as ExtractionProvider
 
     C->>API: POST /v1/extractions/inline { file_name, file_type, file_base64, template_id }
     API->>API: base64_decode(file_base64) → bytes
     API->>API: md5_hash = MD5(bytes)
-    API->>DB: DocumentRepo::find_by_hash(md5_hash)
+    API->>DB: DocumentRepo::find_by_hash(workspace_id, md5_hash)
     alt document already exists
         DB-->>API: Document (reuse)
     else new file
@@ -233,12 +238,12 @@ sequenceDiagram
         API->>DB: DocumentRepo::create(md5_hash, file_name, s3_key, ...)
         DB-->>API: Document
     end
-    API->>DB: TemplateRepo::find_by_id(template_id)
+    API->>DB: TemplateRepo::find_by_id(workspace_id, template_id)
     API->>DB: ExtractionRepo::create_with_status(status="processing")
     API->>S3: StorageClient::download(s3_key)
     S3-->>API: file bytes
-    API->>G: GeminiClient::extract(bytes, mime_type, prompt, schema)
-    G-->>API: { result, input_tokens, output_tokens }
+    API->>P: ExtractionProvider::extract(bytes, mime_type, prompt, schema)
+    P-->>API: { result, input_tokens, output_tokens }
     API->>DB: ExtractionRepo::update_completed(result, tokens, model_id)
     DB-->>API: Extraction
     API-->>C: 200 Extraction { status: "completed", result: {...} }
@@ -283,35 +288,35 @@ sequenceDiagram
     participant Q as Redis Stream
     participant W as struxio-worker
     participant S3 as S3/MinIO
-    participant G as Gemini API
+    participant P as ExtractionProvider
     participant DB as Postgres
 
     C->>API: POST /v1/batches { document_ids: [...], template_id }
-    API->>DB: TemplateRepo::find_by_id(template_id)
-    API->>DB: BatchJobRepo::create(template_id, total_documents)
+    API->>DB: TemplateRepo::find_by_id(workspace_id, template_id)
     loop for each document_id
-        API->>DB: ExtractionRepo::create(doc_id, template_id, batch_job_id, status="pending")
-        API->>Q: XADD extractions:queue * extraction_id doc_id template_id workspace_id batch_job_id
+        API->>DB: DocumentRepo::find_by_id(workspace_id, document_id)
     end
+    API->>DB: txn insert batch_jobs + pending extractions + outbox rows
+    API->>Q: flush outbox (XADD per pending extraction)
     API-->>C: 200 BatchJob { status: "pending", total_documents: N }
 
-    Note over W,G: Worker processes concurrently with bounded permits
+    Note over W,P: Worker processes concurrently with bounded permits
     loop for each job in queue
         W->>Q: XAUTOCLAIM stale PEL + XREADGROUP COUNT N
         Q-->>W: ExtractionJob
-        W->>DB: claim_for_processing (attempt++, skip if terminal)
+        W->>DB: claim_for_processing exclusive lease (pending/retrying or expired processing)
         W->>DB: DocumentRepo::find_by_id
         W->>DB: TemplateRepo::find_by_id
         W->>S3: download(s3_key)
-        W->>G: GeminiClient::extract(...)
+        W->>P: ExtractionProvider::extract(...)
         alt success
-            W->>DB: apply_completed + recompute batch counters in one txn
+            W->>DB: apply_completed_claimed + recompute batch counters in one txn
             W->>Q: XACK
         else retryable failure, attempts remaining
-            W->>DB: mark_retrying
+            W->>DB: mark_retrying_claimed
             W->>Q: ZADD extractions:delayed then XACK
         else permanent or exhausted
-            W->>DB: apply_failed + recompute batch counters in one txn
+            W->>DB: apply_failed_claimed + recompute batch counters in one txn
             W->>Q: XADD extractions:dlq then XACK
         end
     end
@@ -350,7 +355,9 @@ trait QueueConsumer  { async fn next_job(...) → Option<ExtractionJob> }
 - **At-least-once delivery.** ACK happens only after a durable success, a durable retry (`retrying` + delayed ZSET), or a durable dead-letter (`failed` + `extractions:dlq`).
 - **Concurrent consumers.** `XREADGROUP COUNT N` plus a bounded semaphore; stale PEL entries are reclaimed with `XAUTOCLAIM`.
 - **Idempotent terminal state.** Completing or failing an already-terminal extraction is a no-op and does not bump batch counters.
-- **Honest batch status.** Counters are recomputed from child rows inside the same transaction as the terminal write: `completed`, `partially_completed`, or `failed` only when no child is pending, processing, or retrying.
+- **Honest batch status.** Counters are recomputed from child rows inside the same transaction as the terminal write. A batch is terminal only when every requested document has a child row and none of those children are pending, processing, or retrying. Fewer children than `total_documents` stays `processing`.
+- **Create is fail-closed in Postgres.** `BatchService::create` validates every document, then inserts the batch, extraction rows, and outbox rows in one transaction. `flush_batch_outbox` publishes after commit; a reconciler retries unpublished jobs.
+- **Exclusive processing leases.** `claim_for_processing` takes `pending`/`retrying`, or reclaiming an expired `processing` lease. A live lease cannot be stolen. Terminal writes go through `apply_*_claimed` so a fenced worker cannot overwrite the owner.
 
 Workspace identity is a required stream field. Malformed or nil-workspace entries are dead-lettered and ACKed, never executed.
 
@@ -358,9 +365,11 @@ Workspace identity is a required stream field. Malformed or nil-workspace entrie
 
 ## Authentication
 
-Every endpoint requires `Authorization: Bearer <STRUXIO_API_KEY>`.
+Every endpoint except `GET /v1/health` requires `Authorization: Bearer <STRUXIO_API_KEY>`.
 
-The key is validated in the `static_auth` Axum middleware via `FromRequestParts`. On success, it injects an `AuthUser` marker into the request — a unit struct that proves authentication with no identity fields.
+OSS auth lives in `FromRequestParts<AppState> for PrincipalContext`. A matching bearer clones `AppState.local_principal`, loaded at boot from the seeded `local` workspace and `local`/`operator` membership. That context always carries a non-nil `WorkspaceId`, `PrincipalId`, and `ScopeSet`. Isolation is workspace-wide. `principal_id` is not used in repository queries.
+
+A cloud binary may insert `PrincipalContext` into request extensions and skip the API key. Handlers call `require_scope` for the route. `GET /v1/models/default` is authenticated but currently unscoped.
 
 ```bash
 export STRUXIO_API_KEY=your-api-key

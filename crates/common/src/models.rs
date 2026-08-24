@@ -64,8 +64,13 @@ impl ChildCounts {
         self.pending + self.processing + self.retrying
     }
 
-    pub fn batch_status(self) -> BatchStatus {
-        if self.open() > 0 {
+    pub fn accounted(self) -> i32 {
+        self.open() + self.completed + self.failed
+    }
+
+    pub fn batch_status(self, total_documents: i32) -> BatchStatus {
+        let expected = total_documents.max(0);
+        if self.accounted() < expected || self.open() > 0 {
             if self.completed == 0 && self.failed == 0 && self.processing == 0 && self.retrying == 0
             {
                 BatchStatus::Pending
@@ -81,8 +86,8 @@ impl ChildCounts {
         }
     }
 
-    pub fn as_status_str(self) -> &'static str {
-        match self.batch_status() {
+    pub fn as_status_str(self, total_documents: i32) -> &'static str {
+        match self.batch_status(total_documents) {
             BatchStatus::Pending => "pending",
             BatchStatus::Processing => "processing",
             BatchStatus::Completed => "completed",
@@ -91,8 +96,8 @@ impl ChildCounts {
         }
     }
 
-    pub fn is_terminal(self) -> bool {
-        self.open() == 0
+    pub fn is_terminal(self, total_documents: i32) -> bool {
+        self.open() == 0 && self.accounted() >= total_documents.max(0)
     }
 }
 

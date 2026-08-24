@@ -217,8 +217,8 @@ fn batch_stays_processing_while_any_child_is_retrying() {
         completed: 2,
         failed: 1,
     };
-    assert_eq!(counts.batch_status(), BatchStatus::Processing);
-    assert!(!counts.is_terminal());
+    assert_eq!(counts.batch_status(4), BatchStatus::Processing);
+    assert!(!counts.is_terminal(4));
 }
 
 #[test]
@@ -231,7 +231,7 @@ fn batch_terminal_states_are_honest() {
             completed: 0,
             failed: 0,
         }
-        .batch_status(),
+        .batch_status(3),
         BatchStatus::Pending
     );
     assert_eq!(
@@ -242,7 +242,7 @@ fn batch_terminal_states_are_honest() {
             completed: 1,
             failed: 0,
         }
-        .batch_status(),
+        .batch_status(2),
         BatchStatus::Processing
     );
     assert_eq!(
@@ -253,7 +253,7 @@ fn batch_terminal_states_are_honest() {
             completed: 3,
             failed: 0,
         }
-        .batch_status(),
+        .batch_status(3),
         BatchStatus::Completed
     );
     assert_eq!(
@@ -264,7 +264,7 @@ fn batch_terminal_states_are_honest() {
             completed: 2,
             failed: 1,
         }
-        .batch_status(),
+        .batch_status(3),
         BatchStatus::PartiallyCompleted
     );
     assert_eq!(
@@ -275,9 +275,23 @@ fn batch_terminal_states_are_honest() {
             completed: 0,
             failed: 3,
         }
-        .batch_status(),
+        .batch_status(3),
         BatchStatus::Failed
     );
+}
+
+#[test]
+fn batch_is_not_terminal_when_requested_children_are_missing() {
+    let counts = ChildCounts {
+        pending: 0,
+        processing: 0,
+        retrying: 0,
+        completed: 2,
+        failed: 0,
+    };
+    assert_eq!(counts.batch_status(5), BatchStatus::Processing);
+    assert!(!counts.is_terminal(5));
+    assert_eq!(counts.as_status_str(5), "processing");
 }
 
 #[test]

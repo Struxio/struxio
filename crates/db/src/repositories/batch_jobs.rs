@@ -144,19 +144,21 @@ impl BatchJobRepo {
         workspace_id: WorkspaceId,
         id: Uuid,
     ) -> Result<Option<BatchJob>, sqlx::Error> {
-        let locked =
-            sqlx::query("SELECT id FROM batch_jobs WHERE workspace_id = $1 AND id = $2 FOR UPDATE")
-                .bind(workspace_id.as_uuid())
-                .bind(id)
-                .fetch_optional(&mut **tx)
-                .await?;
-        if locked.is_none() {
+        let locked = sqlx::query(
+            "SELECT total_documents FROM batch_jobs WHERE workspace_id = $1 AND id = $2 FOR UPDATE",
+        )
+        .bind(workspace_id.as_uuid())
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        let Some(locked) = locked else {
             return Ok(None);
-        }
+        };
+        let total_documents: i32 = locked.get("total_documents");
 
         let counts = super::extractions::child_counts_in_tx(tx, workspace_id, id).await?;
-        let status = counts.as_status_str();
-        let completed_at_now = counts.is_terminal();
+        let status = counts.as_status_str(total_documents);
+        let completed_at_now = counts.is_terminal(total_documents);
 
         let row = sqlx::query(&format!(
             r#"UPDATE batch_jobs SET
